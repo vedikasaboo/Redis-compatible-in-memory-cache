@@ -41,13 +41,24 @@ async def handle_client(
     store: LRUCache,
     persistence: "Persistence | None" = None,
     max_query_buffer: int = DEFAULT_MAX_QUERY_BUFFER,
+    idle_timeout: float = 0.0,
 ) -> None:
     peer = writer.get_extra_info("peername")
     logger.debug("connection from %s", peer)
     buffer = b""
     try:
         while True:
-            data = await reader.read(READ_CHUNK)  # yields until bytes arrive or the peer closes
+            if idle_timeout > 0:
+                # An idle client otherwise holds a socket and a coroutine
+                # forever. Redis calls this `timeout` and defaults it to 0
+                # (disabled); so does this server.
+                try:
+                    data = await asyncio.wait_for(reader.read(READ_CHUNK), idle_timeout)
+                except asyncio.TimeoutError:
+                    logger.debug("closing %s: idle for %.1fs", peer, idle_timeout)
+                    break
+            else:
+                data = await reader.read(READ_CHUNK)  # yields until bytes arrive or the peer closes
             if not data:
                 break
             buffer += data
@@ -142,6 +153,7 @@ async def run_server(
     max_query_buffer: int = DEFAULT_MAX_QUERY_BUFFER,
     expiry_interval: float = DEFAULT_EXPIRY_INTERVAL,
     expiry_sample: int = DEFAULT_EXPIRY_SAMPLE,
+    idle_timeout: float = 0.0,
 ) -> None:
     store = LRUCache(capacity)
 
@@ -168,7 +180,7 @@ async def run_server(
         expirer = asyncio.create_task(_expiry_loop(store, expiry_interval, expiry_sample))
 
     async def _handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        await handle_client(reader, writer, store, persistence, max_query_buffer)
+        await handle_client(reader, writer, store, persistence, max_query_buffer, idle_timeout)
 
     server = await asyncio.start_server(_handler, host, port)
     addrs = ", ".join(str(sock.getsockname()) for sock in server.sockets)
@@ -206,6 +218,8 @@ def main() -> None:
                     help="seconds between active-expiry sweeps; 0 disables (lazy expiry still applies)")
     ap.add_argument("--expiry-sample", type=int, default=DEFAULT_EXPIRY_SAMPLE,
                     help="TTL-carrying keys examined per sweep")
+    ap.add_argument("--idle-timeout", type=float, default=0.0,
+                    help="disconnect a connection idle this many seconds; 0 disables (Redis default)")
     args = ap.parse_args()
     if args.verbose:
         logging.getLogger("cache").setLevel(logging.DEBUG)
@@ -222,6 +236,7 @@ def main() -> None:
                 max_query_buffer=args.max_query_buffer,
                 expiry_interval=args.expiry_interval,
                 expiry_sample=args.expiry_sample,
+                idle_timeout=args.idle_timeout,
             )
         )
     except KeyboardInterrupt:

@@ -7,3 +7,5 @@ __pycache__/
 *.log
 .DS_Store
 .claude/
+cluster.json
+data/
