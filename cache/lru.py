@@ -1,11 +1,11 @@
 """
-Fixed-capacity LRU cache. YOU IMPLEMENT THIS.
+Fixed-capacity LRU cache.
 
-Must be O(1) for get/set/delete. collections.OrderedDict would give you
-O(1) for free, but the point of this exercise is to build the mechanism
-OrderedDict hides: a hashmap for O(1) lookup, plus a doubly linked list for
-O(1) reordering by recency, kept in sync by hand. Use sentinel head/tail
-nodes so insertion and removal at either end never needs a None check.
+O(1) get/set/delete. collections.OrderedDict would give that for free, but
+this builds the mechanism OrderedDict hides: a hashmap for O(1) lookup plus
+a doubly linked list for O(1) reordering by recency, kept in sync by hand.
+Sentinel head/tail nodes mean insertion and removal at either end never
+needs a None check.
 """
 
 
@@ -24,10 +24,10 @@ class LRUCache:
     Recency order: the list's HEAD side is most-recently-used, the TAIL
     side is least-recently-used.
 
-    Invariant every method must preserve: after get() or set() touches an
-    existing key, that key's node must be moved to the most-recently-used
-    end. When set() would insert a NEW key past capacity, the
-    least-recently-used entry (at the tail end) must be evicted first.
+    Invariant every method preserves: after get() or set() touches an
+    existing key, that key's node is moved to the most-recently-used end.
+    When set() inserts a NEW key past capacity, the least-recently-used
+    entry (at the tail end) is evicted first.
     """
 
     def __init__(self, capacity: int):
@@ -35,43 +35,67 @@ class LRUCache:
             raise ValueError("capacity must be positive")
         self.capacity = capacity
         self._map: dict[bytes, _Node] = {}
-        # YOU IMPLEMENT THIS: create head/tail sentinel _Node objects and
-        # link them to each other (head.next = tail, tail.prev = head) so
-        # the list is never truly empty and every insert/remove is a plain
-        # pointer splice with no edge-case branching.
-        raise NotImplementedError("YOU IMPLEMENT THIS")
+        # Sentinels: the list is never empty, so every splice below is
+        # unconditional pointer work with no edge-case branching.
+        self._head = _Node()  # MRU side
+        self._tail = _Node()  # LRU side
+        self._head.next = self._tail
+        self._tail.prev = self._head
+
+    # -- internal list surgery -------------------------------------------
+
+    def _unlink(self, node: _Node) -> None:
+        """Detach `node` from the list. O(1)."""
+        node.prev.next = node.next
+        node.next.prev = node.prev
+        node.prev = node.next = None
+
+    def _push_front(self, node: _Node) -> None:
+        """Insert `node` at the most-recently-used end. O(1)."""
+        node.next = self._head.next
+        node.prev = self._head
+        self._head.next.prev = node
+        self._head.next = node
+
+    # -- public API ------------------------------------------------------
 
     def get(self, key: bytes) -> bytes | None:
-        """
-        Return the value for `key`, or None if `key` is absent.
-        On a hit, move `key`'s node to the most-recently-used end.
-        Must be O(1).
-        """
-        raise NotImplementedError("YOU IMPLEMENT THIS")
+        """Return the value for `key`, or None if absent. Refreshes recency."""
+        node = self._map.get(key)
+        if node is None:
+            return None
+        self._unlink(node)
+        self._push_front(node)
+        return node.value
 
     def set(self, key: bytes, value: bytes) -> None:
-        """
-        Insert or update `key` -> `value`; `key` becomes most-recently-used.
+        """Insert or update `key` -> `value`; `key` becomes most-recently-used."""
+        node = self._map.get(key)
+        if node is not None:
+            # Update in place — size is unchanged, so no eviction check.
+            node.value = value
+            self._unlink(node)
+            self._push_front(node)
+            return
 
-        If `key` already exists, update its value in place and move it to
-        the most-recently-used end (do not change self size accounting
-        twice for an update).
+        if len(self._map) >= self.capacity:
+            lru = self._tail.prev
+            # Guarded by capacity > 0, so this is always a real node, never
+            # the head sentinel.
+            del self._map[lru.key]
+            self._unlink(lru)
 
-        If `key` is new and inserting it would make len(self) exceed
-        self.capacity, evict the least-recently-used entry (tail end)
-        first — evict exactly one entry per new key over capacity; this
-        cache is never allowed to hold more than self.capacity entries.
-
-        Must be O(1) amortized.
-        """
-        raise NotImplementedError("YOU IMPLEMENT THIS")
+        node = _Node(key, value)
+        self._map[key] = node
+        self._push_front(node)
 
     def delete(self, key: bytes) -> bool:
-        """
-        Remove `key` if present. Return True if it was present and removed,
-        False if it was already absent. Must be O(1).
-        """
-        raise NotImplementedError("YOU IMPLEMENT THIS")
+        """Remove `key` if present. True if it was removed, False if absent."""
+        node = self._map.pop(key, None)
+        if node is None:
+            return False
+        self._unlink(node)
+        return True
 
     def __len__(self) -> int:
         return len(self._map)

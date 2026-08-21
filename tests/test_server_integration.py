@@ -6,6 +6,7 @@ they will fail until both cache.resp.parse and cache.lru.LRUCache are
 implemented. That's expected — they're the validation for those stubs.
 """
 import socket
+import struct
 import time
 
 import pytest
@@ -107,6 +108,25 @@ def test_oversized_bulk_string_rejected_and_connection_closed(server):
         assert reply.startswith(b"-ERR")
         # server must close the connection after a protocol error
         assert sock.recv(65536) == b""
+
+
+def test_abrupt_disconnect_does_not_break_server(server):
+    """
+    A client that RSTs the connection (SO_LINGER 0) instead of closing
+    politely must not produce an unhandled exception or take the server
+    down — redis-benchmark does exactly this when it exits.
+    """
+    host, port = server
+    sock = socket.create_connection((host, port), timeout=5)
+    sock.sendall(_cmd("SET", "before", "reset"))
+    sock.recv(65536)
+    # force an RST rather than a graceful FIN
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+    sock.close()
+    time.sleep(0.2)
+
+    # server must still be serving other clients
+    assert _send_recv(host, port, _cmd("PING")) == b"+PONG\r\n"
 
 
 @pytest.mark.capacity(2)

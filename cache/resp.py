@@ -2,8 +2,8 @@
 RESP (REdis Serialization Protocol) encoding and decoding.
 
 Two halves live here on purpose:
-  - encode(): turns a Python value into RESP reply bytes. IMPLEMENTED.
-  - parse():  turns raw bytes off the wire into commands. YOU IMPLEMENT THIS.
+  - encode(): turns a Python value into RESP reply bytes.
+  - parse():  turns raw bytes off the wire into commands.
 
 Splitting them this way mirrors the real asymmetry in the protocol: a
 client's *request* is always one shape (an array of bulk strings), while a
@@ -76,7 +76,7 @@ def encode(value) -> bytes:
 
 
 # --------------------------------------------------------------------------
-# Decoder — YOU IMPLEMENT THIS
+# Decoder
 # --------------------------------------------------------------------------
 
 def parse(buffer: bytes) -> tuple[list[list[bytes]], bytes]:
@@ -151,4 +151,77 @@ def parse(buffer: bytes) -> tuple[list[list[bytes]], bytes]:
             == ([[b"PING"], [b"PING"]], b"")
         # two pipelined commands, both returned from one call
     """
-    raise NotImplementedError("YOU IMPLEMENT THIS")
+    commands: list[list[bytes]] = []
+    pos = 0
+    end = len(buffer)
+
+    # Outer loop = pipelining: keep pulling commands until the buffer runs
+    # out or a command is cut short. `start` marks where the command being
+    # decoded began, so an incomplete one can be handed back whole as
+    # leftover rather than partially consumed.
+    while pos < end:
+        start = pos
+
+        if buffer[pos : pos + 1] != b"*":
+            raise ProtocolError("expected '*' (a request must be an array of bulk strings)")
+
+        header_end = buffer.find(b"\r\n", pos)
+        if header_end == -1:
+            return commands, buffer[start:]  # array header hasn't fully arrived
+
+        try:
+            argc = int(buffer[pos + 1 : header_end])
+        except ValueError:
+            raise ProtocolError("invalid multibulk length") from None
+        if argc < 0:
+            raise ProtocolError("invalid multibulk length")
+
+        pos = header_end + 2
+        args: list[bytes] = []
+        truncated = False
+
+        for _ in range(argc):
+            if pos >= end:
+                truncated = True
+                break
+
+            if buffer[pos : pos + 1] != b"$":
+                raise ProtocolError("expected '$' (array elements must be bulk strings)")
+
+            len_end = buffer.find(b"\r\n", pos)
+            if len_end == -1:
+                truncated = True  # bulk length header still incomplete
+                break
+
+            try:
+                blen = int(buffer[pos + 1 : len_end])
+            except ValueError:
+                raise ProtocolError("invalid bulk length") from None
+            if blen < 0:
+                raise ProtocolError("invalid bulk length")
+            # Reject on the DECLARED length, before buffering the payload —
+            # otherwise a client could pin unbounded memory just by lying.
+            if blen > MAX_BULK_LEN:
+                raise ProtocolError("invalid bulk length (exceeds maximum)")
+
+            payload_start = len_end + 2
+            payload_end = payload_start + blen
+            # Need the payload AND its trailing CRLF before this arg is complete.
+            if payload_end + 2 > end:
+                truncated = True
+                break
+            if buffer[payload_end : payload_end + 2] != b"\r\n":
+                raise ProtocolError("bulk string not terminated by CRLF")
+
+            # Slice by LENGTH, never by scanning for \r\n — payloads are
+            # binary-safe and may legitimately contain CRLF themselves.
+            args.append(buffer[payload_start:payload_end])
+            pos = payload_end + 2
+
+        if truncated:
+            return commands, buffer[start:]
+
+        if args:  # a zero-length array carries no command; consume and ignore
+            commands.append(args)
+
+    return commands, buffer[pos:]

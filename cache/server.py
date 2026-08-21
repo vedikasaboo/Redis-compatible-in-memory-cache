@@ -22,7 +22,7 @@ READ_CHUNK = 65536
 
 async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, store: LRUCache) -> None:
     peer = writer.get_extra_info("peername")
-    logger.info("connection from %s", peer)
+    logger.debug("connection from %s", peer)
     buffer = b""
     try:
         while True:
@@ -47,12 +47,19 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                 reply = dispatch(command, store)
                 writer.write(encode(reply))
             await writer.drain()  # backpressure: yield until the OS write buffer has room
-    except ConnectionResetError:
-        pass
+    except (ConnectionResetError, BrokenPipeError):
+        pass  # peer went away mid-request; nothing to report
     finally:
-        logger.info("closing %s", peer)
-        writer.close()
-        await writer.wait_closed()
+        logger.debug("closing %s", peer)
+        # A peer that vanishes abruptly (redis-benchmark does this on exit)
+        # can make close()/wait_closed() raise too, so the teardown path
+        # needs the same guard as the read loop — otherwise the connection
+        # dies with an unhandled traceback in the server log.
+        try:
+            writer.close()
+            await writer.wait_closed()
+        except (ConnectionResetError, BrokenPipeError):
+            pass
 
 
 async def run_server(host: str, port: int, capacity: int) -> None:
@@ -74,7 +81,10 @@ def main() -> None:
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=6390)
     ap.add_argument("--capacity", type=int, default=10_000, help="max number of keys before LRU eviction")
+    ap.add_argument("--verbose", action="store_true", help="log every connection open/close")
     args = ap.parse_args()
+    if args.verbose:
+        logging.getLogger("cache").setLevel(logging.DEBUG)
     asyncio.run(run_server(args.host, args.port, args.capacity))
 
 
