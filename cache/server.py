@@ -154,8 +154,27 @@ async def run_server(
     expiry_interval: float = DEFAULT_EXPIRY_INTERVAL,
     expiry_sample: int = DEFAULT_EXPIRY_SAMPLE,
     idle_timeout: float = 0.0,
+    eviction: str = "lru",
+    model_path: str = "models/mixed.txt",
+    eviction_sample: int = 16,
 ) -> None:
-    store = LRUCache(capacity)
+    # LRUCache is the default because it is the cheapest thing that works:
+    # true LRU in O(1) with no per-access scoring. Any other policy needs
+    # the instrumented store, which carries access statistics on every
+    # entry — real memory and real time, paid on every access.
+    if eviction == "lru":
+        store = LRUCache(capacity)
+    else:
+        from cache.eviction import build as build_policy
+        from cache.store import PolicyStore
+
+        kwargs = {"sample_size": eviction_sample}
+        if eviction == "ml":
+            kwargs["model_path"] = model_path
+        # Loaded once, here at startup — never per request.
+        policy = build_policy(eviction, **kwargs)
+        store = PolicyStore(capacity, policy=policy)
+        logger.info("eviction policy: %s", policy.name)
 
     persistence = None
     if data_dir is not None:
@@ -218,6 +237,12 @@ def main() -> None:
                     help="seconds between active-expiry sweeps; 0 disables (lazy expiry still applies)")
     ap.add_argument("--expiry-sample", type=int, default=DEFAULT_EXPIRY_SAMPLE,
                     help="TTL-carrying keys examined per sweep")
+    ap.add_argument("--eviction", default="lru",
+                    choices=["lru", "true-lru", "sampled-lru", "sampled-lfu", "random", "ml"],
+                    help="eviction policy; 'lru' uses the lightweight default store")
+    ap.add_argument("--model", default="models/mixed.txt", help="model file when --eviction ml")
+    ap.add_argument("--eviction-sample", type=int, default=16,
+                    help="candidates sampled per eviction for sampling policies")
     ap.add_argument("--idle-timeout", type=float, default=0.0,
                     help="disconnect a connection idle this many seconds; 0 disables (Redis default)")
     args = ap.parse_args()
@@ -237,6 +262,9 @@ def main() -> None:
                 expiry_interval=args.expiry_interval,
                 expiry_sample=args.expiry_sample,
                 idle_timeout=args.idle_timeout,
+                eviction=args.eviction,
+                model_path=args.model,
+                eviction_sample=args.eviction_sample,
             )
         )
     except KeyboardInterrupt:
