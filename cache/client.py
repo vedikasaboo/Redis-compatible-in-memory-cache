@@ -94,6 +94,28 @@ class Client:
         self.send(*args)
         return self.read_reply()
 
+    def pipeline(self, commands: list[tuple]) -> list:
+        """
+        Send every command in ONE write, then collect all replies.
+
+        This is the throughput lever measured in NOTES.md: it pays a single
+        network round trip for the whole batch instead of one per command.
+        Errors are returned in place rather than raised, so one failing
+        command does not discard the rest of the batch's replies.
+        """
+        payload = b"".join(
+            encode([a if isinstance(a, bytes) else str(a).encode() for a in cmd])
+            for cmd in commands
+        )
+        self._sock.sendall(payload)
+        replies = []
+        for _ in commands:
+            try:
+                replies.append(self.read_reply())
+            except CacheError as exc:
+                replies.append(exc)
+        return replies
+
     # -- conveniences ----------------------------------------------------
 
     def ping(self):
@@ -102,8 +124,22 @@ class Client:
     def get(self, key):
         return self.command("GET", key)
 
-    def set(self, key, value):
+    def set(self, key, value, ex=None, px=None, exat=None, pxat=None):
+        for name, value_ in (("EX", ex), ("PX", px), ("EXAT", exat), ("PXAT", pxat)):
+            if value_ is not None:
+                return self.command("SET", key, value, name, value_)
         return self.command("SET", key, value)
 
     def delete(self, *keys):
         return self.command("DEL", *keys)
+
+    def exists(self, *keys):
+        return self.command("EXISTS", *keys)
+
+    def ttl(self, key):
+        """Seconds remaining; -1 if no expiry, -2 if the key is gone."""
+        return self.command("TTL", key)
+
+    def pttl(self, key):
+        """Milliseconds remaining; -1 if no expiry, -2 if the key is gone."""
+        return self.command("PTTL", key)

@@ -16,6 +16,11 @@ from dataclasses import dataclass
 MAX_BULK_LEN = 8 * 1024 * 1024  # 8MB — reject a declared bulk length above this
                                  # as soon as the header is parsed, before
                                  # buffering that many bytes.
+MAX_MULTIBULK_LEN = 1024 * 1024  # Cap on elements in one command. Without it a
+                                 # client could send `*999999999\r\n` and then
+                                 # trickle arguments forever, and the server
+                                 # would keep the whole partial command buffered
+                                 # while waiting for an end that never comes.
 
 
 class ProtocolError(Exception):
@@ -173,7 +178,7 @@ def parse(buffer: bytes) -> tuple[list[list[bytes]], bytes]:
             argc = int(buffer[pos + 1 : header_end])
         except ValueError:
             raise ProtocolError("invalid multibulk length") from None
-        if argc < 0:
+        if argc < 0 or argc > MAX_MULTIBULK_LEN:
             raise ProtocolError("invalid multibulk length")
 
         pos = header_end + 2

@@ -5,10 +5,9 @@ Async pieces are driven with asyncio.run() inside sync test functions so
 the suite needs no pytest-asyncio dependency.
 """
 import asyncio
-import os
+import time
 
-import pytest
-
+from cache.commands import dispatch
 from cache.lru import LRUCache
 from cache.persistence import Persistence
 from cache.resp import encode
@@ -171,8 +170,16 @@ def test_snapshot_roundtrip(tmp_path):
     items = [(f"k{i}".encode(), f"v{i}".encode()) for i in range(50)]
     _run(write_snapshot(path, items, log_offset=4321, chunk_size=7))
     loaded, offset = load_snapshot(path)
-    assert loaded == items
+    assert loaded == [(k, v, None) for k, v in items]
     assert offset == 4321
+
+
+def test_snapshot_roundtrip_with_expiry(tmp_path):
+    path = tmp_path / "snapshot.rdb"
+    items = [(b"forever", b"v", None), (b"doomed", b"v", 1_700_000_000_000)]
+    _run(write_snapshot(path, items, log_offset=0))
+    loaded, _ = load_snapshot(path)
+    assert loaded == items
 
 
 def test_snapshot_preserves_binary_values(tmp_path):
@@ -180,7 +187,7 @@ def test_snapshot_preserves_binary_values(tmp_path):
     items = [(b"key", b"has\r\nCRLF\x00inside")]
     _run(write_snapshot(path, items, log_offset=0))
     loaded, _ = load_snapshot(path)
-    assert loaded == items
+    assert loaded == [(b"key", b"has\r\nCRLF\x00inside", None)]
 
 
 def test_missing_snapshot_is_not_an_error(tmp_path):
@@ -307,10 +314,59 @@ def test_recovery_preserves_lru_ordering(tmp_path):
 
 def test_malformed_writes_are_not_logged(tmp_path):
     """A command that errors changes nothing, so it must not reach the log."""
-    from cache.commands import is_durable_write
+    from cache.commands import normalize_write
 
-    assert is_durable_write([b"SET", b"k", b"v"]) is True
-    assert is_durable_write([b"SET", b"k"]) is False  # wrong arity -> error reply
-    assert is_durable_write([b"DEL", b"k"]) is True
-    assert is_durable_write([b"GET", b"k"]) is False
-    assert is_durable_write([b"PING"]) is False
+    now = 1_000_000
+    assert normalize_write([b"SET", b"k", b"v"], now) == [b"SET", b"k", b"v"]
+    assert normalize_write([b"SET", b"k"], now) is None  # wrong arity -> error reply
+    assert normalize_write([b"DEL", b"k"], now) == [b"DEL", b"k"]
+    assert normalize_write([b"GET", b"k"], now) is None
+    assert normalize_write([b"PING"], now) is None
+    assert normalize_write([b"SET", b"k", b"v", b"EX", b"0"], now) is None  # rejected -> not logged
+    assert normalize_write([b"SET", b"k", b"v", b"EX", b"nope"], now) is None
+
+
+def test_relative_expiry_is_logged_as_absolute(tmp_path):
+    """
+    The replay-safety property: a logged `SET ... EX 10` replayed an hour
+    later would grant a fresh 10 seconds. Logging an absolute deadline
+    instead keeps replay faithful no matter when it happens.
+    """
+    from cache.commands import normalize_write
+
+    now = 1_000_000
+    assert normalize_write([b"SET", b"k", b"v", b"EX", b"10"], now) == \
+        [b"SET", b"k", b"v", b"PXAT", b"1010000"]
+    assert normalize_write([b"SET", b"k", b"v", b"PX", b"500"], now) == \
+        [b"SET", b"k", b"v", b"PXAT", b"1000500"]
+    # Absolute forms pass through unchanged in meaning.
+    assert normalize_write([b"SET", b"k", b"v", b"PXAT", b"1234"], now) == \
+        [b"SET", b"k", b"v", b"PXAT", b"1234"]
+
+
+def test_ttl_survives_restart_and_elapses_while_down(tmp_path):
+    """A key whose deadline passes during downtime must not come back."""
+    async def write():
+        store = LRUCache(100)
+        p = Persistence(store, tmp_path, fsync_mode="always", snapshot_interval=0)
+        p.recover()
+        await p.start()
+        now = store.now_ms()
+        for cmd in (
+            [b"SET", b"lives", b"v", b"PXAT", str(now + 3_600_000).encode()],
+            [b"SET", b"dies", b"v", b"PXAT", str(now + 50).encode()],
+        ):
+            p.stage_write(cmd)
+            dispatch(cmd, store)
+            await p.sync()
+        await p.close()
+
+    _run(write())
+    time.sleep(0.1)  # let "dies" elapse while the server is down
+
+    store2 = LRUCache(100)
+    p2 = Persistence(store2, tmp_path, fsync_mode="always", snapshot_interval=0)
+    p2.recover()
+    _run(p2.close())
+    assert store2.get(b"lives") == b"v"
+    assert store2.get(b"dies") is None

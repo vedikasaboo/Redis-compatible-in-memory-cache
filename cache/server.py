@@ -8,20 +8,31 @@ replies -> write back.
 With persistence enabled the request path gains two steps: a write is
 staged to the WAL before it is applied, and replies for a batch are held
 until the WAL reports them durable (see cache.persistence).
+
+See DESIGN.md for exactly where this path awaits, and why that makes the
+store safe without locks.
 """
 import argparse
 import asyncio
 import logging
 
-from cache.commands import dispatch, is_durable_write
+from cache.commands import dispatch, normalize_write
 from cache.lru import LRUCache
 from cache.persistence import DEFAULT_SNAPSHOT_INTERVAL, Persistence
-from cache.resp import ErrorReply, ProtocolError, encode, parse
+from cache.resp import MAX_BULK_LEN, ErrorReply, ProtocolError, encode, parse
 from cache.wal import FSYNC_MODES
 
 logger = logging.getLogger("cache.server")
 
 READ_CHUNK = 65536
+
+# A connection's unparsed input is capped so an incomplete command cannot
+# grow without bound. It must exceed MAX_BULK_LEN, or a legitimate maximum
+# -size bulk string would be rejected while still arriving.
+DEFAULT_MAX_QUERY_BUFFER = 4 * MAX_BULK_LEN  # 32MB
+
+DEFAULT_EXPIRY_INTERVAL = 0.1
+DEFAULT_EXPIRY_SAMPLE = 20
 
 
 async def handle_client(
@@ -29,6 +40,7 @@ async def handle_client(
     writer: asyncio.StreamWriter,
     store: LRUCache,
     persistence: "Persistence | None" = None,
+    max_query_buffer: int = DEFAULT_MAX_QUERY_BUFFER,
 ) -> None:
     peer = writer.get_extra_info("peername")
     logger.debug("connection from %s", peer)
@@ -39,6 +51,15 @@ async def handle_client(
             if not data:
                 break
             buffer += data
+
+            if len(buffer) > max_query_buffer:
+                # Either a genuinely oversized command or a client dribbling
+                # an endless partial one. Both are handled the same way:
+                # refuse and disconnect, rather than buffer indefinitely.
+                writer.write(encode(ErrorReply("ERR Protocol error: query buffer limit exceeded")))
+                await writer.drain()
+                logger.warning("closing %s: query buffer limit exceeded", peer)
+                break
 
             try:
                 commands, buffer = parse(buffer)
@@ -59,9 +80,16 @@ async def handle_client(
                 # awaited between the two, two clients writing the same key
                 # could be logged in one order and applied in the other, and
                 # replay would rebuild a state no client ever saw.
-                if persistence is not None and is_durable_write(command):
-                    persistence.stage_write(command)
-                replies.append(encode(dispatch(command, store)))
+                #
+                # Dispatch the NORMALIZED command so the expiry deadline
+                # applied in memory is identical to the one logged.
+                record = normalize_write(command, store.now_ms())
+                if record is not None:
+                    if persistence is not None:
+                        persistence.stage_write(record)
+                    replies.append(encode(dispatch(record, store)))
+                else:
+                    replies.append(encode(dispatch(command, store)))
 
             # Durability before acknowledgement. Every writer whose records
             # landed in this tick waits on the same commit, so one fsync
@@ -87,6 +115,22 @@ async def handle_client(
             pass
 
 
+async def _expiry_loop(store: LRUCache, interval: float, sample_size: int) -> None:
+    """
+    Active expiry.
+
+    Lazy expiry alone leaks: a key nobody ever reads again keeps its memory
+    forever. This sweeps a bounded number of TTL-carrying keys per tick —
+    bounded so the sweep itself can never become a latency spike, and
+    awaiting between ticks so it yields the loop back to clients.
+    """
+    while True:
+        await asyncio.sleep(interval)
+        removed = store.expire_sample(sample_size)
+        if removed:
+            logger.debug("active expiry removed %d keys", removed)
+
+
 async def run_server(
     host: str,
     port: int,
@@ -95,6 +139,9 @@ async def run_server(
     fsync_mode: str = "everysec",
     group_commit: bool = True,
     snapshot_interval: float = DEFAULT_SNAPSHOT_INTERVAL,
+    max_query_buffer: int = DEFAULT_MAX_QUERY_BUFFER,
+    expiry_interval: float = DEFAULT_EXPIRY_INTERVAL,
+    expiry_sample: int = DEFAULT_EXPIRY_SAMPLE,
 ) -> None:
     store = LRUCache(capacity)
 
@@ -116,8 +163,12 @@ async def run_server(
             data_dir, fsync_mode, group_commit, snapshot_interval,
         )
 
+    expirer = None
+    if expiry_interval > 0:
+        expirer = asyncio.create_task(_expiry_loop(store, expiry_interval, expiry_sample))
+
     async def _handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        await handle_client(reader, writer, store, persistence)
+        await handle_client(reader, writer, store, persistence, max_query_buffer)
 
     server = await asyncio.start_server(_handler, host, port)
     addrs = ", ".join(str(sock.getsockname()) for sock in server.sockets)
@@ -126,6 +177,12 @@ async def run_server(
         async with server:
             await server.serve_forever()
     finally:
+        if expirer is not None:
+            expirer.cancel()
+            try:
+                await expirer
+            except asyncio.CancelledError:
+                pass
         if persistence is not None:
             await persistence.close()
 
@@ -143,6 +200,12 @@ def main() -> None:
                     help="fsync once per record instead of once per batch (benchmark comparison only)")
     ap.add_argument("--snapshot-interval", type=float, default=DEFAULT_SNAPSHOT_INTERVAL,
                     help="seconds between snapshots; 0 disables")
+    ap.add_argument("--max-query-buffer", type=int, default=DEFAULT_MAX_QUERY_BUFFER,
+                    help="max unparsed bytes buffered per connection before disconnecting it")
+    ap.add_argument("--expiry-interval", type=float, default=DEFAULT_EXPIRY_INTERVAL,
+                    help="seconds between active-expiry sweeps; 0 disables (lazy expiry still applies)")
+    ap.add_argument("--expiry-sample", type=int, default=DEFAULT_EXPIRY_SAMPLE,
+                    help="TTL-carrying keys examined per sweep")
     args = ap.parse_args()
     if args.verbose:
         logging.getLogger("cache").setLevel(logging.DEBUG)
@@ -156,6 +219,9 @@ def main() -> None:
                 fsync_mode=args.fsync,
                 group_commit=not args.no_group_commit,
                 snapshot_interval=args.snapshot_interval,
+                max_query_buffer=args.max_query_buffer,
+                expiry_interval=args.expiry_interval,
+                expiry_sample=args.expiry_sample,
             )
         )
     except KeyboardInterrupt:

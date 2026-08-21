@@ -64,8 +64,10 @@ class Persistence:
         half-recovered cache. Returns the number of records replayed.
         """
         items, snap_offset = load_snapshot(self.snapshot_path)
-        for key, value in items:
-            self.store.set(key, value)
+        for key, value, expires_at in items:
+            # set() drops anything whose deadline already passed, so keys
+            # that expired while the server was down stay dead.
+            self.store.set(key, value, expires_at)
         if items:
             logger.info("loaded snapshot: %d entries at offset %d", len(items), snap_offset)
 

@@ -15,9 +15,11 @@ the dict is not in the snapshot, evicted keys included. The snapshot
 records the log offset it corresponds to; recovery loads it and replays
 only the log tail after that offset.
 
-File format: a fixed-size header carrying that offset, then one RESP
-array per entry (`*2\\r\\n$<klen>\\r\\n<key>\\r\\n$<vlen>\\r\\n<value>\\r\\n`),
-so loading reuses resp.parse() just like the WAL does.
+File format: a fixed-size header carrying that offset, then one RESP array
+per entry — `[key, value]`, or `[key, value, expires_at]` for a key with a
+TTL — so loading reuses resp.parse() just like the WAL does. The deadline
+is stored ABSOLUTE (epoch ms), so a key whose TTL elapsed while the server
+was down comes back already expired instead of getting a fresh lease.
 """
 import asyncio
 import logging
@@ -47,14 +49,25 @@ def _decode_header(raw: bytes) -> int:
         raise ValueError("corrupt snapshot header offset") from None
 
 
+def _encode_entry(entry: tuple) -> bytes:
+    """(key, value) or (key, value, expires_at) -> one RESP array."""
+    key, value = entry[0], entry[1]
+    expires_at = entry[2] if len(entry) > 2 else None
+    if expires_at is None:
+        return encode([key, value])
+    return encode([key, value, str(expires_at).encode()])
+
+
 async def write_snapshot(
     path: Path,
-    items: list[tuple[bytes, bytes]],
+    items: list[tuple],
     log_offset: int,
     chunk_size: int = DEFAULT_CHUNK,
 ) -> None:
     """
     Write `items` as the snapshot at `log_offset`.
+
+    Each item is (key, value) or (key, value, expires_at).
 
     `items` must already be a materialized point-in-time list (see
     LRUCache.items()), NOT a live view — this coroutine awaits between
@@ -71,8 +84,8 @@ async def write_snapshot(
     try:
         f.write(_encode_header(log_offset))
         buf: list[bytes] = []
-        for i, (key, value) in enumerate(items, 1):
-            buf.append(encode([key, value]))
+        for i, entry in enumerate(items, 1):
+            buf.append(_encode_entry(entry))
             if i % chunk_size == 0:
                 await loop.run_in_executor(None, f.write, b"".join(buf))
                 buf.clear()
@@ -98,9 +111,10 @@ async def write_snapshot(
     logger.info("wrote snapshot: %d entries at log offset %d", len(items), log_offset)
 
 
-def load_snapshot(path: Path) -> tuple[list[tuple[bytes, bytes]], int]:
+def load_snapshot(path: Path) -> tuple[list[tuple[bytes, bytes, int | None]], int]:
     """
-    Load (items, log_offset). Returns ([], 0) if there is no snapshot.
+    Load (items, log_offset), each item (key, value, expires_at | None).
+    Returns ([], 0) if there is no snapshot.
 
     A snapshot that fails to parse is treated as absent rather than fatal:
     the WAL alone is always sufficient to rebuild state, just more slowly,
@@ -119,8 +133,13 @@ def load_snapshot(path: Path) -> tuple[list[tuple[bytes, bytes]], int]:
 
     items = []
     for entry in entries:
-        if len(entry) != 2:
+        if len(entry) == 2:
+            items.append((entry[0], entry[1], None))
+        elif len(entry) == 3:
+            try:
+                items.append((entry[0], entry[1], int(entry[2])))
+            except ValueError:
+                logger.warning("ignoring snapshot entry with unreadable expiry")
+        else:
             logger.warning("ignoring malformed snapshot entry of length %d", len(entry))
-            continue
-        items.append((entry[0], entry[1]))
     return items, log_offset
