@@ -148,7 +148,7 @@ def test_access_metadata_updates():
         s.get(b"k")
     entry = s._map[b"k"]
     assert entry.access_count == 5
-    assert entry.prev_gap > 0
+    assert entry.ewma_gap > 0
     assert entry.last_access == s.op
 
 

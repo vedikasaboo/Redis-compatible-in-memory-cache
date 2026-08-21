@@ -1,0 +1,21 @@
+{
+  "trace": "traces_train/scan.trace",
+  "capacity": 4500,
+  "sample_every": 50,
+  "samples_per_point": 8,
+  "seed": 13,
+  "features": [
+    "age",
+    "access_count",
+    "ewma_gap",
+    "age_over_gap"
+  ],
+  "target": "log1p(reuse_distance_ops)",
+  "sim_policy": "true-lru",
+  "sim_model": null,
+  "never_sentinel": 10000000,
+  "rows": 31992,
+  "held_out_mae_log": 2.497705423696327,
+  "mean_baseline_mae_log": 2.536239619100726,
+  "held_out_rank_correlation": 0.39932525173009087
+}

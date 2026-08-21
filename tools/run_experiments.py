@@ -48,6 +48,8 @@ def main() -> None:
     ap.add_argument("--capacity-hint", type=int, default=4500,
                     help="cache size the trainer simulates; should match the benchmark budget")
     ap.add_argument("--skip-train", action="store_true")
+    ap.add_argument("--rounds", type=int, default=2, choices=[1, 2],
+                    help="1 = off-policy only; 2 = add the on-policy refit")
     args = ap.parse_args()
 
     py = sys.executable
@@ -62,12 +64,32 @@ def main() -> None:
          "--seed", str(args.train_seed)], "1b. Training traces (different seed)")
 
     if not args.skip_train:
+        # Round one: examples collected while LRU shapes the resident set.
         for workload in workloads:
             run([py, "tools/train_model.py",
                  "--trace", f"traces_train/{workload}.trace",
-                 "--out", f"models/{workload}.txt",
-                 "--capacity", str(args.capacity_hint)],
-                f"2. Train model: {workload}")
+                 "--out", f"models/{workload}.round1.txt",
+                 "--capacity", str(args.capacity_hint),
+                 "--sim-policy", "true-lru"],
+                f"2a. Train model (round 1, off-policy): {workload}")
+
+        # Round two: re-collect with the round-one model driving eviction, so
+        # the training distribution matches the one the deployed policy
+        # actually induces, then refit on that. Without this the model is
+        # asked at serving time about keys LRU would never have retained.
+        if args.rounds == 2:
+            for workload in workloads:
+                run([py, "tools/train_model.py",
+                     "--trace", f"traces_train/{workload}.trace",
+                     "--out", f"models/{workload}.txt",
+                     "--capacity", str(args.capacity_hint),
+                     "--sim-policy", "ml",
+                     "--sim-model", f"models/{workload}.round1.txt"],
+                    f"2b. Train model (round 2, on-policy): {workload}")
+        else:
+            for workload in workloads:
+                Path(REPO_ROOT / "models" / f"{workload}.txt").write_text(
+                    (REPO_ROOT / "models" / f"{workload}.round1.txt").read_text())
 
     run([py, "tools/bench_eviction.py",
          "--traces", "traces", "--model-dir", "models",

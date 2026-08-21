@@ -1,0 +1,21 @@
+{
+  "trace": "traces_train/zipfian.trace",
+  "capacity": 4500,
+  "sample_every": 50,
+  "samples_per_point": 8,
+  "seed": 13,
+  "features": [
+    "age",
+    "access_count",
+    "ewma_gap",
+    "age_over_gap"
+  ],
+  "target": "log1p(reuse_distance_ops)",
+  "sim_policy": "true-lru",
+  "sim_model": null,
+  "never_sentinel": 10000000,
+  "rows": 31992,
+  "held_out_mae_log": 3.463014323564268,
+  "mean_baseline_mae_log": 4.169409473048993,
+  "held_out_rank_correlation": 0.44778475426648723
+}

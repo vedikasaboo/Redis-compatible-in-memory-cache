@@ -112,34 +112,63 @@ asserted separately, because they are genuinely different guarantees.
 
 | policy | cyclic | mixed | scan | zipfian |
 |---|---:|---:|---:|---:|
-| **learned (ML)** | **26.47%** | 74.71% | **19.13%** | 88.55% |
+| **learned (ML)** | **28.83%** | **76.81%** | **21.61%** | 88.98% |
 | random | 6.99% | 71.80% | 2.42% | 86.23% |
-| sampled-lfu | 0.02% | **76.33%** | 0.00% | **89.13%** |
+| sampled-lfu | 0.02% | 76.33% | 0.00% | **89.13%** |
 | sampled-lru | 0.00% | 73.33% | 0.00% | 88.02% |
 | true-lru | 0.00% | 73.53% | 0.00% | 87.99% |
 
 ![eviction hit rate](results/eviction_hit_rate.png)
 
-**Read this table honestly.** The learned policy wins enormously where LRU
-is pathological — on `cyclic` and `scan`, LRU scores exactly **0%**, because
-every key is evicted just before its next use. It reaches 26.5% against a
-theoretical ceiling of 29.1% (capacity ÷ cycle length).
+The learned policy wins three of four workloads. It is transformative where
+LRU is pathological — on `cyclic` and `scan`, LRU scores exactly **0%**,
+because every key is evicted just before its next use — and it lands within
+~8% of the theoretical ceiling there (capacity ÷ cycle length = 31.2% on
+`cyclic`; it reaches 28.83%).
 
-It **loses** to sampled-LFU on both `mixed` and `zipfian`, the two workloads
-that most resemble real traffic. On the friendly cases, counting accesses is
-simply hard to beat, and a model does not earn its cost.
+It still **loses `zipfian` by 0.20 points**. That gap is small but real
+(beyond 2σ over 5 repeats), and it has a specific cause: the learned policy
+carries 24 bytes/key of metadata against LFU's 16, so at an equal *byte*
+budget it runs 4,681 keys to LFU's 4,854. Given identical capacity it wins
+zipfian too, 89.14% vs 89.10% — so what remains is the honest price of its
+own bookkeeping, not a worse policy.
 
-It also is not free:
+Three things were needed to get here, each worth more than the model choice:
+
+1. **Cheap features.** The first version stored five fields (40 B/key) and
+   lost *every* workload it should have won, purely by running an 11%
+   smaller cache. Replacing a running sum and previous gap with one EWMA,
+   and deriving value size from the value instead of storing it, cut this to
+   three fields. `age_over_gap` — how overdue a key is in units of its own
+   rhythm — is derived, so it is free, and it is the feature that lets one
+   model read both regimes correctly.
+2. **On-policy retraining.** Examples are first collected with LRU shaping
+   the resident set, then re-collected with the round-one model driving
+   eviction, and the model is refit on those. A model trained only on LRU's
+   resident sets is asked at serving time about keys LRU would never have
+   kept. This round alone moved `mixed` from a loss to a win.
+3. **Per-workload models.** One model applied to all four does markedly
+   worse: "older means further from reuse" is right on Zipfian traffic and
+   exactly backwards on a cycle.
+
+**Cost, reported rather than hidden:**
 
 | | per eviction | eviction-heavy throughput |
 |---|---:|---:|
-| true-lru | ~0.5 µs | ~1,100 kops/s |
-| learned | ~50 µs | ~18 kops/s |
+| true-lru | ~0.5 µs | ~1,175 kops/s |
+| learned | ~51 µs | ~25 kops/s |
 
-Inference runs **only at eviction** — never on `GET`/`SET`. There is a test
-asserting that reads and non-evicting writes trigger zero predictions.
+Inference runs **only at eviction** — never on `GET`/`SET`; a test asserts
+reads and non-evicting writes trigger zero predictions. Only the first 50
+trees are evaluated: hit rate is measurably *flat* from 25 trees to the full
+276 while latency falls 2.8×, because the policy ranks 16 candidates rather
+than regressing them accurately. The residual ~34 µs is LightGBM's per-call
+overhead, not tree traversal.
 
----
+The honest summary: on the workloads that look like real traffic it is a
+wash with a well-tuned LFU, and it costs ~100× more per eviction. It earns
+its place only where access patterns defeat recency and frequency outright —
+which is exactly where a cache hurts most.
 
 ## Running it
 
@@ -210,11 +239,12 @@ than oversights.
 - **A small command set.** `GET`, `SET` (with `EX`/`PX`/`EXAT`/`PXAT`),
   `DEL`, `EXISTS`, `TTL`, `PTTL`, `PING`, `INFO`. No hashes, lists, sets,
   transactions, pub/sub, or `SCAN`.
-- **The learned policy is trained per workload.** Each model is fitted to
-  one traffic shape. A single model applied across all four does markedly
-  worse — an early version did exactly that and lost, because "older means
-  further from reuse" is correct on Zipfian traffic and exactly backwards on
-  a cycle. Online adaptation is not implemented.
+- **The learned policy is trained per workload, offline.** Each model is
+  fitted to one traffic shape, in two passes, against a trace generated from
+  the same distribution it is later evaluated on. Real traffic shifts; there
+  is no online adaptation and no drift detection, so a deployed model would
+  silently decay as the workload moved away from what it was fitted to.
+  Detecting that is the obvious next piece of work.
 - **`__len__` counts expired-but-uncollected keys.** Matching Redis's
   `DBSIZE`; use `GET`/`TTL` for expiry-accurate answers.
 - **No auth, no TLS.** Bind to localhost.

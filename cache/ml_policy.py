@@ -28,12 +28,22 @@ logger = logging.getLogger("cache.ml_policy")
 
 class MLPolicy(EvictionPolicy):
     name = "ml"
-    # last_access, access_count, prev_gap, gap_sum, size — five int fields.
-    # Charged against the memory budget so the comparison against policies
-    # that need less bookkeeping stays honest.
-    per_key_metadata_bytes = 40
+    # Three stored fields: last_access, access_count, ewma_gap. Charged
+    # against the memory budget so the comparison against policies that
+    # need less bookkeeping stays honest — and kept deliberately small,
+    # because an earlier five-field version cost 40 bytes/key and lost on
+    # hit rate purely by running an 11% smaller cache.
+    per_key_metadata_bytes = 24
 
-    def __init__(self, model_path, sample_size: int = 16):
+    # Trees actually evaluated at inference. Measured: hit rate is FLAT
+    # from 25 trees to the full 276, while latency falls ~2.8x (100us ->
+    # 36us). The policy only needs to RANK 16 candidates, not regress
+    # accurately — extra trees sharpen the loss without changing which
+    # candidate comes last. The residual ~34us is LightGBM's per-call
+    # overhead, not tree traversal, so truncating further buys nothing.
+    DEFAULT_MAX_TREES = 50
+
+    def __init__(self, model_path, sample_size: int = 16, max_trees: int | None = DEFAULT_MAX_TREES):
         import lightgbm as lgb
 
         path = Path(model_path)
@@ -43,6 +53,7 @@ class MLPolicy(EvictionPolicy):
             )
         self.booster = lgb.Booster(model_file=str(path))
         self.sample_size = sample_size
+        self.max_trees = max_trees
         self.model_path = str(path)
         self.predictions = 0  # observable, to confirm inference stays off the hot path
 
@@ -56,17 +67,17 @@ class MLPolicy(EvictionPolicy):
             [features_from_entry(e, store.op) for e in entries], dtype=np.float64
         )
         # One batched call for the whole candidate set.
-        predicted = self.booster.predict(features)
+        predicted = self.booster.predict(features, num_iteration=self.max_trees)
         self.predictions += 1
         return entries[int(np.argmax(predicted))].key
 
     def score(self, entry, store) -> float:
         features = np.array([features_from_entry(entry, store.op)], dtype=np.float64)
-        return float(self.booster.predict(features)[0])
+        return float(self.booster.predict(features, num_iteration=self.max_trees)[0])
 
 
-def _build(model_path="models/reuse.txt", sample_size=16, **_):
-    return MLPolicy(model_path, sample_size=sample_size)
+def _build(model_path="models/reuse.txt", sample_size=16, max_trees=MLPolicy.DEFAULT_MAX_TREES, **_):
+    return MLPolicy(model_path, sample_size=sample_size, max_trees=max_trees)
 
 
 REGISTRY["ml"] = _build

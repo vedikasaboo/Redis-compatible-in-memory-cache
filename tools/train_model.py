@@ -49,7 +49,8 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from cache.features import FEATURE_NAMES, feature_row  # noqa: E402
+from cache.features import FEATURE_NAMES, features_from_entry  # noqa: E402
+from cache.store import PolicyStore  # noqa: E402
 from tools.workloads import read_trace  # noqa: E402
 
 # Stand-in for "never used again". Must exceed any real distance so the
@@ -72,55 +73,73 @@ def next_use_after(positions: list[int], t: int) -> int:
 
 
 def collect_examples(trace: list[str], capacity: int, sample_every: int,
-                     samples_per_point: int, seed: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+                     samples_per_point: int, seed: int,
+                     sim_policy_factory) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Replay the trace through an LRU cache of `capacity`, sampling resident
-    keys at intervals. Returns (features, labels, positions).
+    Replay the trace through a REAL PolicyStore, sampling resident keys at
+    intervals. Returns (features, labels, positions).
 
-    `positions` records when each row was produced so the train/test split
-    can be made chronologically rather than randomly — a random split would
-    leak future information into training and inflate the score.
+    Simulating with the actual store — and reading features through the
+    actual feature function — removes the last place training and serving
+    could diverge. An earlier version reimplemented an LRU dict here, which
+    worked but meant two definitions of "resident" to keep in step.
+
+    `sim_policy_factory` decides WHICH policy shapes the resident set. Round
+    one uses LRU; round two uses the model from round one, so the examples
+    come from the distribution the deployed policy actually induces. That is
+    the standard fix for an off-policy mismatch: a model trained only on
+    LRU's resident sets is being asked, at serving time, about keys LRU
+    would never have kept.
+
+    Labels are measured in STORE OPERATIONS, not trace positions, because
+    that is the clock the live features use. A miss costs two operations
+    (the failed GET and the backfilling SET), so the two units differ by the
+    miss rate — enough to skew `age` systematically if conflated. `op_at`
+    records the operation count at each trace position so the conversion is
+    exact.
     """
     index = build_position_index(trace)
-    rng = random.Random(seed)
+    store = PolicyStore(capacity=capacity, policy=sim_policy_factory(), seed=seed)
+    value = b"v" * 64
 
-    last_access: dict[str, int] = {}
-    access_count: dict[str, int] = defaultdict(int)
-    gap_sum: dict[str, int] = defaultdict(int)
-    prev_gap: dict[str, int] = defaultdict(int)
-
-    resident: dict[str, None] = {}  # insertion-ordered => LRU order
-    rows, labels, at = [], [], []
+    op_at = [0] * len(trace)
+    pending: list[tuple[list[float], str, int]] = []
 
     for t, key in enumerate(trace):
-        if key in resident:
-            del resident[key]
-        elif len(resident) >= capacity:
-            resident.pop(next(iter(resident)))  # evict LRU
-        resident[key] = None
+        raw = key.encode()
+        if store.get(raw) is None:
+            store.set(raw, value)      # cache-aside: backfill on miss
+        op_at[t] = store.op
 
-        if key in last_access:
-            gap = t - last_access[key]
-            prev_gap[key] = gap
-            gap_sum[key] += gap
-        access_count[key] += 1
-        last_access[key] = t
+        if t % sample_every == 0 and len(store) > samples_per_point:
+            for entry in store.sample_entries(samples_per_point):
+                pending.append((features_from_entry(entry, store.op),
+                                entry.key.decode(), t))
 
-        if t % sample_every == 0 and len(resident) > samples_per_point:
-            keys = list(resident)
-            for candidate in rng.sample(keys, samples_per_point):
-                rows.append(feature_row(
-                    now_op=t,
-                    last_access=last_access[candidate],
-                    access_count=access_count[candidate],
-                    gap_sum=gap_sum[candidate],
-                    prev_gap=prev_gap[candidate],
-                    size=64,
-                ))
-                labels.append(next_use_after(index[candidate], t))
-                at.append(t)
+    rows, labels, at = [], [], []
+    for feats, key, t in pending:
+        positions = index.get(key, [])
+        i = bisect.bisect_right(positions, t)
+        # Distance to the next access, expressed in operations.
+        label = op_at[positions[i]] - op_at[t] if i < len(positions) else NEVER_SENTINEL
+        rows.append(feats)
+        labels.append(label)
+        at.append(t)
 
-    return np.array(rows, dtype=np.float64), np.array(labels, dtype=np.float64), np.array(at)
+    return (np.array(rows, dtype=np.float64),
+            np.array(labels, dtype=np.float64),
+            np.array(at))
+
+
+def make_sim_factory(policy_name: str, model_path: str | None, sample_size: int):
+    from cache.eviction import build as build_policy
+
+    def factory():
+        if policy_name == "ml":
+            return build_policy("ml", model_path=model_path, sample_size=sample_size)
+        return build_policy(policy_name, sample_size=sample_size)
+
+    return factory
 
 
 def main() -> None:
@@ -132,13 +151,21 @@ def main() -> None:
     ap.add_argument("--samples-per-point", type=int, default=8)
     ap.add_argument("--seed", type=int, default=13)
     ap.add_argument("--rounds", type=int, default=300)
+    ap.add_argument("--sim-policy", default="true-lru",
+                    help="policy shaping the resident set while collecting examples")
+    ap.add_argument("--sim-model", default=None,
+                    help="model for --sim-policy ml (on-policy round two)")
+    ap.add_argument("--sample-size", type=int, default=16)
     args = ap.parse_args()
 
     trace = read_trace(Path(args.trace))
     print(f"trace: {args.trace} ({len(trace):,} accesses, {len(set(trace)):,} distinct)")
 
+    factory = make_sim_factory(args.sim_policy, args.sim_model, args.sample_size)
+    print(f"resident set simulated with: {args.sim_policy}"
+          + (f" ({args.sim_model})" if args.sim_model else ""))
     X, y, at = collect_examples(trace, args.capacity, args.sample_every,
-                                args.samples_per_point, args.seed)
+                                args.samples_per_point, args.seed, factory)
     print(f"collected {len(X):,} training rows from eviction-time samples")
 
     # Chronological split: train on the first 80% of the trace, evaluate on
@@ -192,7 +219,8 @@ def main() -> None:
     meta = {
         "trace": str(args.trace), "capacity": args.capacity,
         "sample_every": args.sample_every, "samples_per_point": args.samples_per_point,
-        "seed": args.seed, "features": FEATURE_NAMES, "target": "log1p(reuse_distance)",
+        "seed": args.seed, "features": FEATURE_NAMES, "target": "log1p(reuse_distance_ops)",
+        "sim_policy": args.sim_policy, "sim_model": args.sim_model,
         "never_sentinel": NEVER_SENTINEL, "rows": int(len(X)),
         "held_out_mae_log": mae, "mean_baseline_mae_log": baseline,
         "held_out_rank_correlation": spearman,

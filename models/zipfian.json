@@ -7,14 +7,15 @@
   "features": [
     "age",
     "access_count",
-    "avg_gap",
-    "prev_gap",
-    "size"
+    "ewma_gap",
+    "age_over_gap"
   ],
-  "target": "log1p(reuse_distance)",
+  "target": "log1p(reuse_distance_ops)",
+  "sim_policy": "ml",
+  "sim_model": "models/zipfian.round1.txt",
   "never_sentinel": 10000000,
   "rows": 31992,
-  "held_out_mae_log": 3.357362182275209,
-  "mean_baseline_mae_log": 4.242871603457247,
-  "held_out_rank_correlation": 0.5019563405861093
+  "held_out_mae_log": 3.370697120306452,
+  "mean_baseline_mae_log": 4.086931763926236,
+  "held_out_rank_correlation": 0.5287075696855128
 }

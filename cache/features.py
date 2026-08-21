@@ -15,35 +15,55 @@ Nothing here may consult the future; the label does that, and the label is
 never available at serving time.
 
 Time is LOGICAL — operation ordinals, not wall clock. Reuse distance is
-defined in accesses, so measuring in accesses keeps features and labels in
-the same units and makes replays reproducible across machines.
+defined in operations, so measuring in operations keeps features and labels
+in the same units and makes replays reproducible across machines.
+
+Memory discipline
+-----------------
+Every STORED field is charged against the cache's memory budget, so the
+feature set is deliberately small: three stored fields per key. Anything
+derivable from those (or from the value itself) is computed here for free
+rather than stored. `age_over_gap` in particular costs nothing and carries
+real signal, so it is exactly the kind of feature worth having.
 """
 
-FEATURE_NAMES = ["age", "access_count", "avg_gap", "prev_gap", "size"]
+FEATURE_NAMES = ["age", "access_count", "ewma_gap", "age_over_gap"]
+
+# Weight on the newest gap when updating the running estimate. High enough
+# to react when a key's rhythm changes, low enough not to be defined by a
+# single outlier.
+GAP_ALPHA = 0.3
 
 
 def feature_row(now_op: int, last_access: int, access_count: int,
-                gap_sum: int, prev_gap: int, size: int) -> list[float]:
+                ewma_gap: float) -> list[float]:
     """
     Features for one key as of logical time `now_op`.
 
-    age          — accesses since this key was last touched. The signal LRU
-                   uses, kept so the model can learn when recency is and is
-                   not predictive rather than having it assumed.
+    age          — operations since this key was last touched. The signal
+                   LRU uses, kept so the model can learn when recency is
+                   and is not predictive rather than having it assumed.
     access_count — how often it has been touched. The signal LFU uses.
-    avg_gap      — mean spacing between this key's accesses so far. A key
-                   accessed every ~10 operations behaves very differently
-                   from one accessed every ~10,000, even at equal age.
-    prev_gap     — the most recent spacing, which reacts faster than the
-                   mean when a key's behaviour changes.
-    size         — value size in bytes; larger values cost more to keep.
+    ewma_gap     — exponentially weighted mean spacing between this key's
+                   accesses. A key touched every ~10 operations behaves
+                   very differently from one touched every ~10,000, even at
+                   identical age. One field replaces the running sum and
+                   the previous gap that an exact mean would need.
+    age_over_gap — how overdue the key is, in units of its own rhythm.
+                   Derived, so it costs no memory. This is the feature that
+                   lets one model serve very different workloads: on
+                   Zipfian traffic a hot key sits near 1 and a dead key
+                   climbs, while in a cyclic scan the key closest to its
+                   next use is the one with the LARGEST ratio — the same
+                   number, read correctly in each regime, which a fixed
+                   heuristic like LRU cannot do.
     """
+    age = now_op - last_access
     return [
-        float(now_op - last_access),
+        float(age),
         float(access_count),
-        float(gap_sum) / max(1, access_count - 1),
-        float(prev_gap),
-        float(size),
+        float(ewma_gap),
+        float(age) / max(1.0, float(ewma_gap)),
     ]
 
 
@@ -53,7 +73,5 @@ def features_from_entry(entry, now_op: int) -> list[float]:
         now_op=now_op,
         last_access=entry.last_access,
         access_count=entry.access_count,
-        gap_sum=entry.gap_sum,
-        prev_gap=entry.prev_gap,
-        size=entry.size,
+        ewma_gap=entry.ewma_gap,
     )

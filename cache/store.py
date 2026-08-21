@@ -25,12 +25,13 @@ regardless of how many keys are resident.
 import random
 
 from cache.clock import now_ms
+from cache.features import GAP_ALPHA
 from cache.lru import NO_EXPIRY, NOT_FOUND
 
 
 class Entry:
     __slots__ = ("key", "value", "expires_at", "last_access", "access_count",
-                 "prev_gap", "gap_sum", "size", "prev", "next")
+                 "ewma_gap", "prev", "next")
 
     def __init__(self, key=None, value=None, expires_at=None, op=0):
         self.key = key
@@ -41,16 +42,25 @@ class Entry:
         # time makes replays reproducible regardless of machine speed.
         self.last_access = op
         self.access_count = 1
-        self.prev_gap = 0      # gap between the two most recent accesses
-        self.gap_sum = 0       # total of all gaps, for the running average
-        self.size = len(value) if value is not None else 0
+        # One field instead of a running sum plus the previous gap: every
+        # stored field is charged against the memory budget, and an EWMA
+        # carries the same signal in a third of the space.
+        self.ewma_gap = 0.0
         self.prev: "Entry | None" = None
         self.next: "Entry | None" = None
 
+    @property
+    def size(self) -> int:
+        """Derived, never stored — len() on bytes is O(1)."""
+        return len(self.value) if self.value is not None else 0
+
     def touch(self, op: int) -> None:
         gap = op - self.last_access
-        self.prev_gap = gap
-        self.gap_sum += gap
+        # Seed on the first observed gap rather than decaying up from zero,
+        # which would understate a slow key for its first several accesses.
+        self.ewma_gap = float(gap) if self.access_count == 1 else (
+            GAP_ALPHA * gap + (1.0 - GAP_ALPHA) * self.ewma_gap
+        )
         self.access_count += 1
         self.last_access = op
 
@@ -170,7 +180,6 @@ class PolicyStore:
         entry = self._map.get(key)
         if entry is not None:
             entry.value = value
-            entry.size = len(value)
             entry.expires_at = expires_at
             entry.touch(self.op)
             self._track_expiry(key, expires_at)

@@ -20,27 +20,52 @@ needs_model = pytest.mark.skipif(not MODEL.exists(), reason="run tools/run_exper
 # -- features ------------------------------------------------------------
 
 def test_feature_row_shape_matches_names():
-    row = feature_row(now_op=100, last_access=90, access_count=5,
-                      gap_sum=40, prev_gap=10, size=64)
+    row = feature_row(now_op=100, last_access=90, access_count=5, ewma_gap=10.0)
     assert len(row) == len(FEATURE_NAMES)
 
 
 def test_feature_values():
-    row = feature_row(now_op=100, last_access=90, access_count=5,
-                      gap_sum=40, prev_gap=10, size=64)
-    age, count, avg_gap, prev_gap, size = row
+    row = feature_row(now_op=100, last_access=90, access_count=5, ewma_gap=10.0)
+    age, count, ewma_gap, ratio = row
     assert age == 10
     assert count == 5
-    assert avg_gap == 10  # gap_sum 40 over (5-1) gaps
-    assert prev_gap == 10
-    assert size == 64
+    assert ewma_gap == 10.0
+    assert ratio == 1.0  # exactly one gap overdue
 
 
-def test_avg_gap_safe_on_first_access():
-    """A key seen once has zero gaps; the divisor must not be zero."""
-    row = feature_row(now_op=5, last_access=5, access_count=1,
-                      gap_sum=0, prev_gap=0, size=1)
-    assert row[2] == 0.0
+def test_age_over_gap_is_derived_not_stored():
+    """
+    The overdue ratio costs no memory, which is why it is affordable. A key
+    long past its own rhythm should score far above one that is on time.
+    """
+    on_time = feature_row(now_op=110, last_access=100, access_count=9, ewma_gap=10.0)
+    overdue = feature_row(now_op=200, last_access=100, access_count=9, ewma_gap=10.0)
+    assert on_time[3] == 1.0
+    assert overdue[3] == 10.0
+
+
+def test_ratio_safe_when_gap_is_zero():
+    """A key seen once has no observed gap; the divisor must not be zero."""
+    row = feature_row(now_op=5, last_access=5, access_count=1, ewma_gap=0.0)
+    assert row[3] == 0.0
+
+
+def test_ewma_gap_tracks_access_rhythm():
+    """First gap seeds the estimate rather than decaying up from zero."""
+    store = PolicyStore(capacity=10)
+    store.set(b"k", b"v")
+    store.get(b"k")
+    entry = store._map[b"k"]
+    assert entry.ewma_gap == 1.0  # seeded, not 0.3 * 1
+
+
+def test_size_is_derived_not_stored():
+    """Value size needs no stored field, so it is not charged to the budget."""
+    store = PolicyStore(capacity=10)
+    store.set(b"k", b"v" * 64)
+    entry = store._map[b"k"]
+    assert entry.size == 64
+    assert "size" not in type(entry).__slots__
 
 
 def test_live_and_offline_features_agree():
@@ -57,8 +82,7 @@ def test_live_and_offline_features_agree():
     live = features_from_entry(entry, store.op)
     offline = feature_row(
         now_op=store.op, last_access=entry.last_access,
-        access_count=entry.access_count, gap_sum=entry.gap_sum,
-        prev_gap=entry.prev_gap, size=entry.size,
+        access_count=entry.access_count, ewma_gap=entry.ewma_gap,
     )
     assert live == offline
 
@@ -74,6 +98,7 @@ def test_features_use_only_past_information():
     later = features_from_entry(entry, store.op)
     assert later[0] > first[0]      # age increased
     assert later[1] == first[1]     # access_count unchanged
+    assert later[3] > first[3]      # and it looks more overdue
 
 
 # -- labels --------------------------------------------------------------
@@ -162,3 +187,27 @@ def test_ml_policy_charges_for_its_metadata():
     ml = MLPolicy(MODEL)
     assert ml.per_key_metadata_bytes > SampledLFU().per_key_metadata_bytes
     assert ml.per_key_metadata_bytes > SampledLRU().per_key_metadata_bytes
+
+
+@needs_model
+def test_truncating_trees_does_not_change_ranking_much():
+    """
+    Inference evaluates only the first N trees. Measured, hit rate is flat
+    from 25 trees upward — the policy ranks candidates rather than
+    regressing them, so this asserts the truncated model still picks the
+    same victim as the full one on a realistic sample.
+    """
+    from cache.ml_policy import MLPolicy
+
+    store = PolicyStore(capacity=200, policy=MLPolicy(MODEL, sample_size=32), seed=11)
+    for i in range(150):
+        store.set(f"k{i}".encode(), b"v" * 64)
+        if i % 3 == 0:
+            store.get(f"k{i // 2}".encode())
+
+    truncated = MLPolicy(MODEL, sample_size=32, max_trees=50)
+    full = MLPolicy(MODEL, sample_size=32, max_trees=None)
+    entries = store.sample_entries(32)
+    best_t = max(entries, key=lambda e: truncated.score(e, store)).key
+    best_f = max(entries, key=lambda e: full.score(e, store)).key
+    assert best_t == best_f

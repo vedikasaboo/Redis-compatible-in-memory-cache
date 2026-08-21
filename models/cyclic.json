@@ -7,14 +7,15 @@
   "features": [
     "age",
     "access_count",
-    "avg_gap",
-    "prev_gap",
-    "size"
+    "ewma_gap",
+    "age_over_gap"
   ],
-  "target": "log1p(reuse_distance)",
+  "target": "log1p(reuse_distance_ops)",
+  "sim_policy": "ml",
+  "sim_model": "models/cyclic.round1.txt",
   "never_sentinel": 10000000,
   "rows": 31992,
-  "held_out_mae_log": 2.12878019887477,
-  "mean_baseline_mae_log": 2.191646314845308,
-  "held_out_rank_correlation": 0.5393678954791941
+  "held_out_mae_log": 1.3739840499565785,
+  "mean_baseline_mae_log": 2.0220596083696387,
+  "held_out_rank_correlation": 0.811097042818987
 }
