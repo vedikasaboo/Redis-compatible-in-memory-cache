@@ -135,8 +135,32 @@ def cmd_exists(args: list[bytes], store: LRUCache):
     return sum(1 for key in args if key in store)
 
 
+def cmd_info(args: list[bytes], store: LRUCache):
+    """
+    Server stats as a bulk string, in Redis's `field:value` INFO format so
+    redis-cli renders it natively. Drives the live hit-rate readout in the
+    demo — a cache without an observable hit rate is just an expensive dict.
+    """
+    policy = getattr(getattr(store, "policy", None), "name", "lru")
+    lines = [
+        "# Cache",
+        f"policy:{policy}",
+        f"capacity:{store.capacity}",
+        f"keys:{len(store)}",
+        "",
+        "# Stats",
+        f"hits:{store.hits}",
+        f"misses:{store.misses}",
+        f"hit_rate:{store.hit_rate:.4f}",
+        f"evictions:{store.evictions}",
+        f"expired:{store.expired_count}",
+    ]
+    return "\r\n".join(lines).encode() + b"\r\n"
+
+
 DISPATCH = {
     b"PING": cmd_ping,
+    b"INFO": cmd_info,
     b"GET": cmd_get,
     b"SET": cmd_set,
     b"DEL": cmd_del,

@@ -1,9 +1,8 @@
 """
 End-to-end tests: real TCP socket <-> real server subprocess.
 
-These exercise the FULL path (parse -> dispatch -> LRUCache -> encode), so
-they will fail until both cache.resp.parse and cache.lru.LRUCache are
-implemented. That's expected — they're the validation for those stubs.
+These exercise the FULL path: parse -> dispatch -> LRUCache -> encode, over
+a real socket against a real server subprocess.
 """
 import socket
 import struct
@@ -143,3 +142,46 @@ def test_eviction_under_a_real_connection(server):
         assert sock.recv(65536) == b"$-1\r\n"
         sock.sendall(_cmd("GET", "c"))
         assert sock.recv(65536) == b"$1\r\n3\r\n"
+
+
+def test_info_reports_stats(server):
+    """INFO drives the demo's live hit-rate readout, so it must be accurate."""
+    host, port = server
+    with socket.create_connection((host, port), timeout=5) as sock:
+        sock.sendall(_cmd("SET", "a", "1"))
+        sock.recv(65536)
+        sock.sendall(_cmd("GET", "a"))          # hit
+        sock.recv(65536)
+        sock.sendall(_cmd("GET", "nope"))       # miss
+        sock.recv(65536)
+        sock.sendall(_cmd("INFO"))
+        body = sock.recv(65536)
+
+    assert body.startswith(b"$")
+    fields = dict(
+        line.split(":", 1)
+        for line in body.split(b"\r\n", 1)[1].decode().splitlines()
+        if ":" in line
+    )
+    assert fields["hits"] == "1"
+    assert fields["misses"] == "1"
+    assert fields["hit_rate"] == "0.5000"
+    assert fields["policy"] == "lru"
+
+
+@pytest.mark.capacity(2)
+def test_info_counts_evictions(server):
+    host, port = server
+    with socket.create_connection((host, port), timeout=5) as sock:
+        for i in range(5):
+            sock.sendall(_cmd("SET", f"k{i}", "v"))
+            sock.recv(65536)
+        sock.sendall(_cmd("INFO"))
+        body = sock.recv(65536)
+    fields = dict(
+        line.split(":", 1)
+        for line in body.split(b"\r\n", 1)[1].decode().splitlines()
+        if ":" in line
+    )
+    assert int(fields["evictions"]) == 3   # 5 inserts into a 2-key cache
+    assert int(fields["keys"]) == 2

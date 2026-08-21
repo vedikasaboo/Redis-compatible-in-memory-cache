@@ -63,7 +63,13 @@ class LRUCache:
         self._sweep_pool: list[bytes] = []
         self._sweep_idx = 0
 
-        self.expired_count = 0  # observable, for tests and the demo readout
+        # Observable counters. Two increments on the read path is a price
+        # worth paying: without a hit rate you cannot tell a healthy cache
+        # from an expensive dictionary.
+        self.expired_count = 0
+        self.hits = 0
+        self.misses = 0
+        self.evictions = 0
 
     def now_ms(self) -> int:
         return self._clock()
@@ -104,12 +110,15 @@ class LRUCache:
         """Return the value for `key`, or None if absent or expired."""
         node = self._map.get(key)
         if node is None:
+            self.misses += 1
             return None
         if self._expired(node):
             # Lazy expiry: the read is what collects the key.
             self._drop(key, node)
             self.expired_count += 1
+            self.misses += 1
             return None
+        self.hits += 1
         self._unlink(node)
         self._push_front(node)
         return node.value
@@ -143,6 +152,7 @@ class LRUCache:
             # Guarded by capacity > 0, so this is always a real node, never
             # the head sentinel.
             self._drop(lru.key, lru)
+            self.evictions += 1
 
         node = _Node(key, value, expires_at)
         self._map[key] = node
@@ -201,6 +211,14 @@ class LRUCache:
                 self.expired_count += 1
                 removed += 1
         return removed
+
+    @property
+    def hit_rate(self) -> float:
+        total = self.hits + self.misses
+        return self.hits / total if total else 0.0
+
+    def reset_stats(self) -> None:
+        self.hits = self.misses = self.evictions = 0
 
     def items(self) -> list[tuple[bytes, bytes, int | None]]:
         """
