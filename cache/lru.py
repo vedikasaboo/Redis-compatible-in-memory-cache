@@ -97,6 +97,25 @@ class LRUCache:
         self._unlink(node)
         return True
 
+    def items(self) -> list[tuple[bytes, bytes]]:
+        """
+        All entries in LEAST- to MOST-recently-used order.
+
+        Snapshotting uses this: re-inserting the result in the returned
+        order rebuilds the same recency ordering, so a recovered cache
+        evicts in the same sequence the crashed one would have.
+
+        Synchronous and atomic by construction — it never awaits, so no
+        command handler can mutate the store partway through, and the
+        caller gets a consistent point-in-time view.
+        """
+        out = []
+        node = self._tail.prev
+        while node is not self._head:
+            out.append((node.key, node.value))
+            node = node.prev
+        return out
+
     def __len__(self) -> int:
         return len(self._map)
 

@@ -48,6 +48,24 @@ DISPATCH = {
 }
 
 
+def is_durable_write(command: list[bytes]) -> bool:
+    """
+    True if this command mutates state AND is well-formed enough to apply.
+
+    The arity check matters: a malformed `SET` gets an error reply and
+    changes nothing, so logging it would make replay diverge from the
+    state clients actually observed.
+    """
+    if not command:
+        return False
+    name = command[0].upper()
+    if name == b"SET":
+        return len(command) == 3
+    if name == b"DEL":
+        return len(command) >= 2
+    return False
+
+
 def dispatch(command: list[bytes], store: LRUCache):
     """Route a parsed command to its handler; unknown commands -> RESP error."""
     name = command[0].upper()
