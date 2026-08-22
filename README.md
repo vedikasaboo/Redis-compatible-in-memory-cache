@@ -110,65 +110,99 @@ asserted separately, because they are genuinely different guarantees.
 
 ### Eviction policies — hit rate (200k accesses, 1 MB budget, 5 repeats)
 
+Every sampling policy gets the **same 64 candidates per eviction**, and every
+policy gets the same **byte** budget (so a policy with fatter per-key
+metadata gets proportionally fewer keys).
+
 | policy | cyclic | mixed | scan | zipfian |
 |---|---:|---:|---:|---:|
-| **learned (ML)** | **28.83%** | **76.81%** | **21.61%** | 88.98% |
-| random | 6.99% | 71.80% | 2.42% | 86.23% |
-| sampled-lfu | 0.02% | 76.33% | 0.00% | **89.13%** |
-| sampled-lru | 0.00% | 73.33% | 0.00% | 88.02% |
+| **learned (ML)** | **30.61%** | 77.18% | **23.41%** | 89.02% |
+| sampled-lfu | 0.00% | **77.73%** | 0.00% | **89.45%** |
+| sampled-lru | 0.00% | 73.96% | 0.00% | 88.31% |
 | true-lru | 0.00% | 73.53% | 0.00% | 87.99% |
+| random | 6.96% | 71.82% | 2.39% | 86.22% |
 
 ![eviction hit rate](results/eviction_hit_rate.png)
 
-The learned policy wins three of four workloads. It is transformative where
-LRU is pathological — on `cyclic` and `scan`, LRU scores exactly **0%**,
-because every key is evicted just before its next use — and it lands within
-~8% of the theoretical ceiling there (capacity ÷ cycle length = 31.2% on
-`cyclic`; it reaches 28.83%).
+**The learned policy wins two of four, and loses two.** All four gaps are
+statistically significant over 5 repeats.
 
-It still **loses `zipfian` by 0.20 points**. That gap is small but real
-(beyond 2σ over 5 repeats), and it has a specific cause: the learned policy
-carries 24 bytes/key of metadata against LFU's 16, so at an equal *byte*
-budget it runs 4,681 keys to LFU's 4,854. Given identical capacity it wins
-zipfian too, 89.14% vs 89.10% — so what remains is the honest price of its
-own bookkeeping, not a worse policy.
+Where it wins, it wins completely. On `cyclic` and `scan` every classical
+policy scores **exactly 0.00%** — each key is evicted just before its next
+use, so recency and frequency are not merely unhelpful but actively
+misleading. The model reaches **23.41% on `scan` against a theoretical
+ceiling of 23.4%** (capacity ÷ key range), and 30.61% on `cyclic` against a
+31.2% ceiling. It has essentially found the optimal strategy on both.
 
-Three things were needed to get here, each worth more than the model choice:
+Where it loses, it loses narrowly: 0.55 points on `mixed`, 0.44 on
+`zipfian` — the two workloads that most resemble real traffic. On those, a
+plain frequency counter is simply hard to beat, and the model's noisier
+estimate of the same signal costs it.
 
-1. **Cheap features.** The first version stored five fields (40 B/key) and
-   lost *every* workload it should have won, purely by running an 11%
-   smaller cache. Replacing a running sum and previous gap with one EWMA,
-   and deriving value size from the value instead of storing it, cut this to
-   three fields. `age_over_gap` — how overdue a key is in units of its own
-   rhythm — is derived, so it is free, and it is the feature that lets one
-   model read both regimes correctly.
-2. **On-policy retraining.** Examples are first collected with LRU shaping
+#### An earlier version of this table was not a fair fight
+
+It gave the learned policy 16 candidates per eviction while the classical
+policies got 5, justified by the model's scoring being a cheap batched
+prediction. That reasoning is true but not exclusive — scoring a candidate
+for LFU is two attribute reads, cheaper still. Measured, **LFU gains just as
+much from a wider sample as the model does** (`mixed`: 76.32% at 5
+candidates → 77.72% at 64). Correcting it flipped `mixed` from a claimed win
+into a loss. The table above is the corrected one.
+
+#### Things tried that did not work
+
+- **A ranking objective.** The policy never consumes a predicted distance as
+  a number; it only asks which of 64 candidates is worst. Training
+  LightGBM's LambdaRank to optimise that ordering directly is the
+  theoretically right move, and it did not help: `mixed` 77.37% vs 77.71%
+  for plain regression, `zipfian` 88.98% vs 89.00%. Available behind
+  `--objective rank`, left off by default.
+- **A single model across all workloads.** Markedly worse — "older means
+  further from reuse" is right on Zipfian traffic and exactly backwards on a
+  cycle. Models are trained per workload.
+
+#### What did work
+
+1. **Cheaper features (40 → 24 bytes/key).** The first version stored five
+   fields and lost workloads it should have won, purely by running an 11%
+   smaller cache at the same byte budget. A running gap-sum and previous gap
+   collapsed into one EWMA; value size was dropped entirely (zero feature
+   importance, and free to derive with `len()`). `age_over_gap` — how
+   overdue a key is in units of its own rhythm — is derived, so it costs
+   nothing, and it is what lets one model read opposite regimes correctly.
+2. **On-policy retraining.** Examples are collected once with LRU shaping
    the resident set, then re-collected with the round-one model driving
-   eviction, and the model is refit on those. A model trained only on LRU's
-   resident sets is asked at serving time about keys LRU would never have
-   kept. This round alone moved `mixed` from a loss to a win.
-3. **Per-workload models.** One model applied to all four does markedly
-   worse: "older means further from reuse" is right on Zipfian traffic and
-   exactly backwards on a cycle.
+   eviction, and the model refit on those. A model trained only on LRU's
+   resident sets is being asked, at serving time, about keys LRU would never
+   have kept.
+3. **A wider candidate sample.** 16 → 64 lifted `cyclic` from 28.8% to
+   30.6% and `scan` from 21.6% to 23.4%, for only 25% more inference time,
+   because per-call overhead dominates a batch this small. It helps the
+   classical policies too, which is exactly why they now get it as well.
 
-**Cost, reported rather than hidden:**
+#### Cost
 
-| | per eviction | eviction-heavy throughput |
-|---|---:|---:|
-| true-lru | ~0.5 µs | ~1,175 kops/s |
-| learned | ~51 µs | ~25 kops/s |
+At equal sample size, on an eviction-heavy workload:
 
-Inference runs **only at eviction** — never on `GET`/`SET`; a test asserts
+| policy | µs per operation |
+|---|---:|
+| true-lru | 0.83 |
+| sampled-lru | 17.58 |
+| sampled-lfu | 19.50 |
+| learned | 87.84 |
+
+So the model is ~4.5× the cost of sampled-LFU and ~100× true-LRU. Inference
+runs **only at eviction** — never on `GET`/`SET`, and a test asserts that
 reads and non-evicting writes trigger zero predictions. Only the first 50
-trees are evaluated: hit rate is measurably *flat* from 25 trees to the full
-276 while latency falls 2.8×, because the policy ranks 16 candidates rather
-than regressing them accurately. The residual ~34 µs is LightGBM's per-call
-overhead, not tree traversal.
+trees are evaluated: hit rate is measurably flat from 25 trees to the full
+276 while latency falls 2.8×, since ranking 64 candidates does not need the
+regression accuracy the extra trees buy.
 
-The honest summary: on the workloads that look like real traffic it is a
-wash with a well-tuned LFU, and it costs ~100× more per eviction. It earns
-its place only where access patterns defeat recency and frequency outright —
-which is exactly where a cache hurts most.
+**The honest summary:** on traffic that looks real, a well-tuned LFU beats
+this model, and costs a fraction as much. The model earns its place only
+where access patterns defeat recency and frequency outright — but there it
+is not a marginal improvement, it is the difference between a cache that
+works and one returning 0%.
 
 ## Running it
 

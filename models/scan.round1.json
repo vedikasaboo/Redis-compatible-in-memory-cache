@@ -10,6 +10,7 @@
     "ewma_gap",
     "age_over_gap"
   ],
+  "objective": "regression",
   "target": "log1p(reuse_distance_ops)",
   "sim_policy": "true-lru",
   "sim_model": null,

@@ -10,12 +10,13 @@
     "ewma_gap",
     "age_over_gap"
   ],
+  "objective": "regression",
   "target": "log1p(reuse_distance_ops)",
   "sim_policy": "ml",
   "sim_model": "models/zipfian.round1.txt",
   "never_sentinel": 10000000,
   "rows": 31992,
-  "held_out_mae_log": 3.370697120306452,
-  "mean_baseline_mae_log": 4.086931763926236,
-  "held_out_rank_correlation": 0.5287075696855128
+  "held_out_mae_log": 3.3380472985770804,
+  "mean_baseline_mae_log": 4.056542886917531,
+  "held_out_rank_correlation": 0.49880092044825725
 }

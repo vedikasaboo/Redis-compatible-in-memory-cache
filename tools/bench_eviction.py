@@ -111,11 +111,20 @@ def resolve_model(model_dir: Path, workload: str, fallback: str) -> str:
 
 
 def make_policy(name: str, sample_size: int, model_path: str, ml_sample_size: int):
+    """
+    Every sampling policy gets the SAME candidate count by default.
+
+    An earlier version gave the learned policy 16 candidates while the
+    classical ones got 5, on the reasoning that a batched prediction makes a
+    wider sample cheap for the model. That reasoning is true but it is not
+    exclusive: scoring a candidate for LFU is a couple of attribute reads,
+    which is cheaper still. Measured, sampled-LFU gains just as much from a
+    wider sample as the model does (mixed: 76.32% at 5 -> 77.72% at 64), so
+    the old comparison was crediting the model for extra candidates rather
+    than better judgement.
+    """
     if name == "ml":
-        # The learned policy samples more candidates than the classical
-        # ones: its scoring is a batched prediction, so a wider sample
-        # costs little beyond a slightly larger matrix.
-        return build(name, model_path=model_path, sample_size=ml_sample_size)
+        return build(name, model_path=model_path, sample_size=ml_sample_size or sample_size)
     return build(name, sample_size=sample_size)
 
 
@@ -197,10 +206,13 @@ def main() -> None:
     ap.add_argument("--warmup-frac", type=float, default=0.2)
     ap.add_argument("--repeats", type=int, default=5)
     ap.add_argument("--seed", type=int, default=7)
-    ap.add_argument("--sample-size", type=int, default=5)
+    ap.add_argument("--sample-size", type=int, default=64,
+                    help="candidates sampled per eviction, for ALL sampling policies")
     ap.add_argument("--policies", nargs="+", default=DEFAULT_POLICIES)
     ap.add_argument("--model", default="models/reuse.txt", help="model file for the 'ml' policy")
-    ap.add_argument("--ml-sample-size", type=int, default=16)
+    ap.add_argument("--ml-sample-size", type=int, default=None,
+                    help="override the candidate count for the learned policy only "
+                         "(default: same as every other policy, which is the fair comparison)")
     ap.add_argument("--model-dir", default="models", help="per-workload models named <workload>.txt")
     ap.add_argument("--out", default=None, help="results JSON path")
     args = ap.parse_args()

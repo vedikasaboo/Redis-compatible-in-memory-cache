@@ -10,12 +10,13 @@
     "ewma_gap",
     "age_over_gap"
   ],
+  "objective": "regression",
   "target": "log1p(reuse_distance_ops)",
   "sim_policy": "ml",
   "sim_model": "models/cyclic.round1.txt",
   "never_sentinel": 10000000,
   "rows": 31992,
-  "held_out_mae_log": 1.3739840499565785,
-  "mean_baseline_mae_log": 2.0220596083696387,
-  "held_out_rank_correlation": 0.811097042818987
+  "held_out_mae_log": 1.0596650488919652,
+  "mean_baseline_mae_log": 1.8351716826875462,
+  "held_out_rank_correlation": 0.9150105371502871
 }

@@ -104,6 +104,7 @@ def collect_examples(trace: list[str], capacity: int, sample_every: int,
 
     op_at = [0] * len(trace)
     pending: list[tuple[list[float], str, int]] = []
+    groups: list[int] = []   # rows emitted per sampling point, for ranking
 
     for t, key in enumerate(trace):
         raw = key.encode()
@@ -112,9 +113,11 @@ def collect_examples(trace: list[str], capacity: int, sample_every: int,
         op_at[t] = store.op
 
         if t % sample_every == 0 and len(store) > samples_per_point:
-            for entry in store.sample_entries(samples_per_point):
+            sampled = store.sample_entries(samples_per_point)
+            for entry in sampled:
                 pending.append((features_from_entry(entry, store.op),
                                 entry.key.decode(), t))
+            groups.append(len(sampled))
 
     rows, labels, at = [], [], []
     for feats, key, t in pending:
@@ -128,7 +131,8 @@ def collect_examples(trace: list[str], capacity: int, sample_every: int,
 
     return (np.array(rows, dtype=np.float64),
             np.array(labels, dtype=np.float64),
-            np.array(at))
+            np.array(at),
+            np.array(groups))
 
 
 def make_sim_factory(policy_name: str, model_path: str | None, sample_size: int):
@@ -155,7 +159,10 @@ def main() -> None:
                     help="policy shaping the resident set while collecting examples")
     ap.add_argument("--sim-model", default=None,
                     help="model for --sim-policy ml (on-policy round two)")
-    ap.add_argument("--sample-size", type=int, default=16)
+    ap.add_argument("--sample-size", type=int, default=64)
+    ap.add_argument("--objective", default="regression", choices=["regression", "rank"],
+                    help="rank optimises the ORDERING within each sampled candidate set, "
+                         "which is the decision the policy actually makes")
     args = ap.parse_args()
 
     trace = read_trace(Path(args.trace))
@@ -164,8 +171,8 @@ def main() -> None:
     factory = make_sim_factory(args.sim_policy, args.sim_model, args.sample_size)
     print(f"resident set simulated with: {args.sim_policy}"
           + (f" ({args.sim_model})" if args.sim_model else ""))
-    X, y, at = collect_examples(trace, args.capacity, args.sample_every,
-                                args.samples_per_point, args.seed, factory)
+    X, y, at, groups = collect_examples(trace, args.capacity, args.sample_every,
+                                        args.samples_per_point, args.seed, factory)
     print(f"collected {len(X):,} training rows from eviction-time samples")
 
     # Chronological split: train on the first 80% of the trace, evaluate on
@@ -175,25 +182,64 @@ def main() -> None:
     train_mask = at <= cutoff
     X_train, y_train = X[train_mask], np.log1p(y[train_mask])
     X_test, y_test = X[~train_mask], np.log1p(y[~train_mask])
-    print(f"train {len(X_train):,} rows / test {len(X_test):,} rows (chronological 80-20)")
+    if args.objective == "regression":
+        print(f"train {len(X_train):,} rows / test {len(X_test):,} rows (chronological 80-20)")
 
-    model = lgb.LGBMRegressor(
-        n_estimators=args.rounds, learning_rate=0.06, num_leaves=31,
-        min_child_samples=40, subsample=0.9, subsample_freq=1,
-        colsample_bytree=0.9, random_state=args.seed, verbose=-1,
-        # Pinned to one thread and baked into the saved model. The serving
-        # side is a single-threaded event loop, and letting an OpenMP pool
-        # spin up inside an eviction would add scheduling jitter to every
-        # other connection for no throughput gain on a 16-row batch.
-        num_threads=1, n_jobs=1,
-    )
-    # Fitted on a bare array, deliberately: the live scorer predicts from a
-    # numpy array too, and a model carrying feature NAMES would warn on
-    # every prediction about the mismatch. Names are attached for reporting
-    # below instead.
-    model.fit(X_train, y_train,
-              eval_X=X_test, eval_y=y_test, eval_metric="l2",
-              callbacks=[lgb.early_stopping(30, verbose=False)])
+    if args.objective == "rank":
+        # The policy never uses a predicted distance as a number — it only
+        # asks "which of these candidates is worst". LambdaRank optimises
+        # exactly that ordering, within each sampled candidate set, instead
+        # of spending capacity on absolute accuracy nobody consumes.
+        # Relevance grades are the within-group ranking of reuse distance,
+        # so the furthest-away key is the one the model must rank top.
+        def grade(group_labels):
+            order = np.argsort(np.argsort(group_labels))
+            return order  # 0 = soonest reuse ... n-1 = furthest away
+
+        graded, offset = [], 0
+        for size in groups:
+            graded.append(grade(y[offset:offset + size]))
+            offset += size
+        y_graded = np.concatenate(graded)
+
+        # Split on GROUP boundaries, chronologically — a group split down
+        # the middle would leak part of a candidate set across the divide.
+        cum = np.cumsum(groups)
+        group_time = at[np.concatenate([[0], cum[:-1]])]
+        cutoff = np.quantile(group_time, 0.8)
+        train_groups = groups[group_time <= cutoff]
+        test_groups = groups[group_time > cutoff]
+        n_train = int(train_groups.sum())
+
+        X_train, y_train = X[:n_train], y_graded[:n_train]
+        X_test, y_test = X[n_train:], y_graded[n_train:]
+        print(f"train {len(X_train):,} rows / test {len(X_test):,} rows "
+              f"({len(train_groups):,} / {len(test_groups):,} candidate sets)")
+
+        model = lgb.LGBMRanker(
+            n_estimators=args.rounds, learning_rate=0.06, num_leaves=31,
+            min_child_samples=40, random_state=args.seed, verbose=-1,
+            num_threads=1, n_jobs=1, label_gain=list(range(max(groups) + 1)),
+        )
+        # eval_group is indexed per eval SET, not per group, so it takes a
+        # list containing this eval set's group array.
+        model.fit(X_train, y_train, group=train_groups,
+                  eval_set=[(X_test, y_test)], eval_group=[test_groups],
+                  callbacks=[lgb.early_stopping(30, verbose=False)])
+    else:
+        model = lgb.LGBMRegressor(
+            n_estimators=args.rounds, learning_rate=0.06, num_leaves=31,
+            min_child_samples=40, subsample=0.9, subsample_freq=1,
+            colsample_bytree=0.9, random_state=args.seed, verbose=-1,
+            # Pinned to one thread and baked into the saved model. The serving
+            # side is a single-threaded event loop, and letting an OpenMP pool
+            # spin up inside an eviction would add scheduling jitter to every
+            # other connection for no throughput gain on a small batch.
+            num_threads=1, n_jobs=1,
+        )
+        model.fit(X_train, y_train,
+                  eval_X=X_test, eval_y=y_test, eval_metric="l2",
+                  callbacks=[lgb.early_stopping(30, verbose=False)])
 
     pred = model.predict(X_test)
     mae = float(np.mean(np.abs(pred - y_test)))
@@ -219,7 +265,9 @@ def main() -> None:
     meta = {
         "trace": str(args.trace), "capacity": args.capacity,
         "sample_every": args.sample_every, "samples_per_point": args.samples_per_point,
-        "seed": args.seed, "features": FEATURE_NAMES, "target": "log1p(reuse_distance_ops)",
+        "seed": args.seed, "features": FEATURE_NAMES, "objective": args.objective,
+        "target": "within-group rank of reuse distance" if args.objective == "rank"
+                  else "log1p(reuse_distance_ops)",
         "sim_policy": args.sim_policy, "sim_model": args.sim_model,
         "never_sentinel": NEVER_SENTINEL, "rows": int(len(X)),
         "held_out_mae_log": mae, "mean_baseline_mae_log": baseline,
