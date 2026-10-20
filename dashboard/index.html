@@ -1,0 +1,670 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cache Server Dashboard</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --ink: #1b1f24; --muted: #5b6573; --line: #e2e6eb;
+  --accent: #2f6fde; --ok: #1f9d55; --bad: #d64545; --warn: #c98a0b;
+  --code-bg: #f1f3f6; --n0: #2f6fde; --n1: #d9822b; --n2: #1f9d8a; --n3: #8b5cf6; --n4: #d64590;
+  --tag: #b43e8f; --len: #2f6fde; --crlf: #a3abb6;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1216; --panel: #171b21; --ink: #e6e9ee; --muted: #98a2b0; --line: #2a3039;
+    --accent: #6a9cff; --ok: #3ccf7f; --bad: #ff6b6b; --warn: #f0b429;
+    --code-bg: #0b0e12; --n0: #6a9cff; --n1: #f0a050; --n2: #3cc7b0; --n3: #a78bfa; --n4: #f472b6;
+    --tag: #f07ac8; --len: #7fb0ff; --crlf: #59616d;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1216; --panel: #171b21; --ink: #e6e9ee; --muted: #98a2b0; --line: #2a3039;
+  --accent: #6a9cff; --ok: #3ccf7f; --bad: #ff6b6b; --warn: #f0b429;
+  --code-bg: #0b0e12; --n0: #6a9cff; --n1: #f0a050; --n2: #3cc7b0; --n3: #a78bfa; --n4: #f472b6;
+  --tag: #f07ac8; --len: #7fb0ff; --crlf: #59616d;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; }
+code, .mono, pre { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+header { display: flex; align-items: center; gap: 16px; padding: 14px 24px; border-bottom: 1px solid var(--line);
+  background: var(--panel); position: sticky; top: 0; z-index: 5; flex-wrap: wrap; }
+header h1 { font-size: 17px; margin: 0; font-weight: 650; }
+header .sub { color: var(--muted); font-size: 13px; }
+nav { display: flex; gap: 4px; margin-left: auto; flex-wrap: wrap; }
+nav button { border: 1px solid transparent; background: none; color: var(--muted); padding: 7px 12px;
+  border-radius: 8px; cursor: pointer; font: inherit; font-size: 14px; }
+nav button.active { background: var(--code-bg); color: var(--ink); border-color: var(--line); font-weight: 600; }
+nav button .num { opacity: .55; margin-right: 4px; }
+main { max-width: 1280px; margin: 0 auto; padding: 20px 24px 60px; }
+.tab { display: none; } .tab.active { display: block; }
+.takeaway { border-left: 3px solid var(--accent); padding: 8px 14px; background: var(--panel);
+  border-radius: 0 8px 8px 0; margin-bottom: 18px; color: var(--muted); }
+.takeaway b { color: var(--ink); }
+.grid { display: grid; gap: 16px; }
+.g2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.g3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 900px) { .g2, .g3 { grid-template-columns: minmax(0, 1fr); } main { padding: 16px; } }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; min-width: 0; }
+.card h2 { font-size: 14px; margin: 0 0 10px; font-weight: 650; letter-spacing: .01em; }
+.card h2 .hint { font-weight: 400; color: var(--muted); margin-left: 6px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+input[type=text], input[type=number], select { font: inherit; padding: 7px 10px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--ink); min-width: 0; }
+input[type=text] { flex: 1; font-family: ui-monospace, Menlo, monospace; }
+input[type=number] { width: 84px; }
+button.btn { font: inherit; font-size: 14px; padding: 7px 14px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--panel); color: var(--ink); cursor: pointer; white-space: nowrap; }
+button.btn:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+button.danger { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, var(--line)); }
+button.btn:disabled { opacity: .45; cursor: default; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.chip { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; padding: 3px 9px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--code-bg); color: var(--ink); cursor: pointer; }
+.wire { background: var(--code-bg); border-radius: 8px; padding: 12px; font-family: ui-monospace, Menlo, monospace;
+  font-size: 14px; white-space: pre-wrap; word-break: break-all; min-height: 44px; }
+.wire .t { color: var(--tag); font-weight: 700; } .wire .l { color: var(--len); }
+.wire .c { color: var(--crlf); font-size: 11px; } .wire .d { color: var(--ink); }
+.label { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 12px 0 6px; }
+.explain { width: 100%; border-collapse: collapse; font-size: 13.5px; margin-top: 4px; }
+.explain td { padding: 4px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.explain td:first-child { font-family: ui-monospace, Menlo, monospace; white-space: nowrap; width: 1%; }
+.muted { color: var(--muted); } .ok { color: var(--ok); } .bad { color: var(--bad); }
+.stat { font-size: 26px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.stat small { font-size: 13px; color: var(--muted); font-weight: 400; }
+.timeline { position: relative; margin-top: 8px; }
+.ev { display: grid; grid-template-columns: 70px 54px minmax(0, 1fr); gap: 8px; align-items: center; padding: 3px 0;
+  font-size: 13px; opacity: 0; transform: translateY(4px); transition: opacity .2s, transform .2s; }
+.ev.show { opacity: 1; transform: none; }
+.ev .tm { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
+.ev .dir { font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 4px; text-align: center; }
+.ev .dir.send { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+.ev .dir.recv { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+.ev .by { font-family: ui-monospace, Menlo, monospace; word-break: break-all; }
+.bufbox { background: var(--code-bg); border-radius: 8px; padding: 10px 12px; min-height: 44px;
+  font-family: ui-monospace, Menlo, monospace; font-size: 14px; word-break: break-all; }
+.bufstate { font-size: 13px; margin-top: 6px; }
+.bars .bar { display: grid; grid-template-columns: 110px minmax(0, 1fr) 90px; gap: 10px; align-items: center; margin: 8px 0; font-size: 13px; }
+.bars .track { background: var(--code-bg); border-radius: 6px; height: 22px; overflow: hidden; }
+.bars .fill { height: 100%; border-radius: 6px; transition: width .6s ease; }
+.dots { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 12px; }
+.dots i { width: 9px; height: 9px; border-radius: 2px; background: var(--line); transition: background .2s; }
+.dots i.on { background: var(--ok); }
+.node { border-top: 4px solid var(--nc); }
+.node .head { display: flex; align-items: center; gap: 8px; }
+.node .head b { font-size: 15px; }
+.pill { font-size: 11.5px; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
+.pill.up { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+.pill.down { background: color-mix(in srgb, var(--bad) 18%, transparent); color: var(--bad); }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: 13px; margin: 10px 0; }
+.kv span:nth-child(odd) { color: var(--muted); }
+.kv span:nth-child(even) { font-variant-numeric: tabular-nums; text-align: right; }
+.log { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--muted); background: var(--code-bg);
+  border-radius: 6px; padding: 6px 8px; height: 58px; overflow: hidden; white-space: pre; text-overflow: ellipsis; }
+.events { font-size: 13px; max-height: 220px; overflow: auto; }
+.events div { padding: 3px 0; border-bottom: 1px dashed var(--line); }
+.events .bad { color: var(--bad); } .events .ok { color: var(--ok); }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+svg text { fill: var(--muted); font-size: 11px; }
+.toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--bad); color: #fff;
+  padding: 8px 14px; border-radius: 8px; font-size: 13px; display: none; z-index: 20; max-width: 90vw; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>RESP Cache Server</h1>
+    <div class="sub">Live: a real cluster of <code>cache.server</code> processes, driven over real TCP sockets</div>
+  </div>
+  <nav id="nav">
+    <button data-tab="protocol" class="active"><span class="num">1</span>Protocol</button>
+    <button data-tab="framing"><span class="num">2</span>Framing</button>
+    <button data-tab="concurrency"><span class="num">3</span>Concurrency</button>
+    <button data-tab="cluster"><span class="num">4</span>Cluster &amp; failure</button>
+    <button data-tab="security"><span class="num">5</span>Security</button>
+    <button id="theme" title="Toggle theme">◐</button>
+  </nav>
+</header>
+
+<main>
+<!-- ============================ 1. PROTOCOL ============================ -->
+<section class="tab active" id="tab-protocol">
+  <div class="takeaway"><b>TCP only carries a stream of bytes.</b> RESP adds message boundaries on top: a one-byte type tag, then a <i>length prefix</i>. The server reads exactly that many bytes, so values can safely contain any bytes.</div>
+  <div class="grid g2">
+    <div class="card">
+      <h2>Send a command <span class="hint">hand-encoded, raw socket</span></h2>
+      <div class="row">
+        <input type="text" id="cmd" value="SET greeting hello" spellcheck="false">
+        <select id="cmdNode"></select>
+        <button class="btn primary" id="sendCmd">Send</button>
+      </div>
+      <div class="chips" id="presets"></div>
+      <div class="label">Bytes sent → <span id="sentMeta" class="muted"></span></div>
+      <div class="wire" id="sentWire"></div>
+      <div class="label">Bytes received ← <span id="recvMeta" class="muted"></span></div>
+      <div class="wire" id="recvWire"></div>
+      <div class="label">Routing</div>
+      <div id="routeInfo" class="muted" style="font-size:13.5px">-</div>
+    </div>
+    <div class="card">
+      <h2>Reading the request, byte by byte</h2>
+      <table class="explain" id="explainReq"></table>
+      <div class="label">Reply types the server can send</div>
+      <table class="explain">
+        <tr><td><span class="t" style="color:var(--tag)">+</span>OK</td><td>simple string</td></tr>
+        <tr><td><span style="color:var(--tag)">-</span>ERR …</td><td>error</td></tr>
+        <tr><td><span style="color:var(--tag)">:</span>42</td><td>integer</td></tr>
+        <tr><td><span style="color:var(--tag)">$</span>5 hello</td><td>bulk string (length-prefixed)</td></tr>
+        <tr><td><span style="color:var(--tag)">$</span>-1</td><td>null: the key doesn't exist</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 2. FRAMING ============================ -->
+<section class="tab" id="tab-framing">
+  <div class="takeaway"><b>One <code>read()</code> is not one message.</b> A command can arrive split across many TCP segments, and several commands can arrive in one. The server's parser keeps any incomplete tail and waits for more bytes.</div>
+  <div class="grid g2">
+    <div class="card">
+      <h2>Split one command into tiny sends <span class="hint">TCP_NODELAY, delay between each</span></h2>
+      <div class="row">
+        <input type="text" id="splitCmd" value="SET greeting hello" spellcheck="false">
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label class="muted">bytes per send</label><input type="number" id="splitChunk" value="1" min="1" max="64">
+        <label class="muted">delay ms</label><input type="number" id="splitDelay" value="80" min="0" max="500">
+        <button class="btn primary" id="splitGo">Send in pieces</button>
+      </div>
+      <div class="label">What the server has buffered so far</div>
+      <div class="bufbox" id="splitBuf"></div>
+      <div class="bufstate" id="splitState">&nbsp;</div>
+      <div class="label">Timeline</div>
+      <div class="timeline" id="splitTimeline"></div>
+    </div>
+    <div class="card">
+      <h2>Pipelining: many commands, one write</h2>
+      <div class="row">
+        <label class="muted">commands</label><input type="number" id="pipeN" value="6" min="2" max="20">
+        <button class="btn primary" id="pipeGo">Send all in one write()</button>
+      </div>
+      <div class="label">One write, <span id="pipeLen">0</span> bytes</div>
+      <div class="wire" id="pipeWire" style="max-height:150px;overflow:auto"></div>
+      <div class="label">Replies, in order <span id="pipeMeta" class="muted"></span></div>
+      <table class="explain" id="pipeReplies"></table>
+
+      <h2 style="margin-top:22px">Why it matters: round trips <span class="hint">PING × N</span></h2>
+      <div class="row">
+        <input type="number" id="rttN" value="5000" min="10" max="20000">
+        <button class="btn" id="rttGo">Run</button>
+      </div>
+      <div class="bars" id="rttBars"></div>
+      <div id="rttNote" class="muted" style="font-size:13px"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 3. CONCURRENCY ============================ -->
+<section class="tab" id="tab-concurrency">
+  <div class="takeaway"><b>One thread, many clients.</b> The server uses <code>asyncio</code> on top of kqueue/epoll instead of one thread per client. A coroutine waiting on a socket costs almost nothing, and the event loop wakes only the sockets that are ready.</div>
+  <div class="grid g2">
+    <div class="card">
+      <h2>Open N connections at the same time</h2>
+      <div class="row">
+        <input type="range" id="concN" min="10" max="500" step="10" value="200" style="flex:1">
+        <span class="mono" id="concLabel" style="width:40px">200</span>
+        <button class="btn primary" id="concGo">Connect all</button>
+      </div>
+      <div class="dots" id="concDots"></div>
+    </div>
+    <div class="card">
+      <h2>Result</h2>
+      <div class="grid g2" id="concStats">
+        <div><div class="label">sockets open at once</div><div class="stat" id="cs1">-</div></div>
+        <div><div class="label">answered correctly</div><div class="stat" id="cs2">-</div></div>
+        <div><div class="label">server process</div><div class="stat" id="cs3">-</div></div>
+        <div><div class="label">OS threads in that process</div><div class="stat" id="cs4">-</div></div>
+      </div>
+      <p class="muted" style="font-size:13.5px;margin-top:14px">
+        All sockets are opened <i>before</i> any of them sends a command, so the server is holding them all at once.
+        The thread count comes from <code>ps</code> on the real server PID. The few extra threads are asyncio's pool
+        for <code>fsync</code>, so disk flushes never block the event loop. No client gets its own thread.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 4. CLUSTER ============================ -->
+<section class="tab" id="tab-cluster">
+  <div class="takeaway"><b>Consistent hashing, done by the client.</b> Every client builds the same ring and picks the same node for a key, with no coordinator. If one node is <code>kill -9</code>ed, only its keys fail, and they fail fast. On restart it replays its write-ahead log.</div>
+  <div class="grid g3" id="nodeCards"></div>
+  <div class="grid g2" style="margin-top:16px">
+    <div class="card">
+      <h2>Hash ring <span class="hint">150 virtual nodes per server</span></h2>
+      <div class="row">
+        <input type="text" id="ringKey" value="user:42" spellcheck="false">
+        <button class="btn" id="ringGo">Where does this key go?</button>
+      </div>
+      <svg id="ring" viewBox="0 0 400 400" style="width:100%;max-width:420px;display:block;margin:10px auto 0"></svg>
+      <div id="ringInfo" class="muted" style="font-size:13.5px;text-align:center"></div>
+    </div>
+    <div class="card">
+      <h2>Workload</h2>
+      <div class="row">
+        <button class="btn" id="seedGo">1 · Write 6,000 keys</button>
+        <label class="muted">clients</label><input type="number" id="loadN" value="8" min="1" max="64">
+        <button class="btn primary" id="loadGo">2 · Start load</button>
+        <button class="btn" id="verifyGo">Check recovery</button>
+      </div>
+      <div class="legend" id="chartLegend" style="margin-top:12px"></div>
+      <svg id="chart" viewBox="0 0 600 180" preserveAspectRatio="none" style="width:100%;height:180px;display:block;margin-top:6px"></svg>
+      <div id="loadInfo" class="muted" style="font-size:13px"></div>
+      <div class="muted" style="font-size:12.5px;margin-top:4px">Survivors dip a little after a kill because the same client threads also hit the dead shard's keys. That cost is on the client side; the surviving servers themselves are unaffected.</div>
+      <div class="bars" id="verifyBars"></div>
+      <div class="label">Event log</div>
+      <div class="events" id="events"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 5. SECURITY ============================ -->
+<section class="tab" id="tab-security">
+  <div class="takeaway"><b>The cache defends itself at the protocol level.</b> AUTH and TLS keep strangers out. For clients that do get in, the guard watches each connection's traffic, one-second window by one-second window, and decides whether it looks like an attack. It uses hand-written rules or a trained ML model, and it rate-limits or disconnects whatever it flags.</div>
+  <div class="grid g2">
+    <div class="card">
+      <h2>Access control <span class="hint">real exchanges with a password-protected node</span></h2>
+      <div class="row">
+        <button class="btn" data-auth="none">No password</button>
+        <button class="btn" data-auth="wrong">Wrong password</button>
+        <button class="btn primary" data-auth="right">Right password</button>
+      </div>
+      <table class="explain" id="authSteps" style="margin-top:10px"></table>
+      <h2 style="margin-top:18px">Encryption <span class="hint">TLS node, certificate signed by a local CA</span></h2>
+      <div class="row"><button class="btn" id="tlsGo">Check TLS</button></div>
+      <table class="explain" id="tlsOut" style="margin-top:10px"></table>
+    </div>
+    <div class="card">
+      <h2>Guard</h2>
+      <div class="row" id="modeBtns">
+        <button class="btn" data-mode="off">Off</button>
+        <button class="btn" data-mode="rules">Rules</button>
+        <button class="btn" data-mode="ml">ML model</button>
+        <span class="muted" id="modeNote" style="font-size:13px"></span>
+      </div>
+      <div class="label">Traffic</div>
+      <div class="row"><button class="btn" id="legitBtn">Start legitimate traffic</button>
+        <span class="muted" style="font-size:12.5px">2 apps, a busy service, a cache warmer, a viral-key reader, an idle client, a user who mistypes the password</span></div>
+      <div class="label">Attacks</div>
+      <div class="grid g2" id="attackBtns" style="gap:8px"></div>
+    </div>
+  </div>
+  <div class="grid g2" style="margin-top:16px">
+    <div class="card">
+      <h2>Database load <span class="hint">every cache miss becomes a database query</span></h2>
+      <div class="legend"><span><i style="background:var(--ok)"></i>from legitimate clients</span><span><i style="background:var(--bad)"></i>from attackers</span><span><i style="background:var(--muted)"></i>database capacity (dashed)</span></div>
+      <svg id="labChart" viewBox="0 0 600 200" preserveAspectRatio="none" style="width:100%;height:200px;display:block;margin-top:6px"></svg>
+      <div id="labInfo" class="muted" style="font-size:13px"></div>
+      <div class="label">Guard events</div>
+      <div class="events" id="labEvents"></div>
+    </div>
+    <div class="card">
+      <h2>Connections, as the guard sees them <span class="hint">from GUARD STATUS</span></h2>
+      <table class="explain" id="connTable"></table>
+    </div>
+  </div>
+</section>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const NODE_COLORS = ['var(--n0)', 'var(--n1)', 'var(--n2)', 'var(--n3)', 'var(--n4)'];
+let nodeIds = [];
+const colorOf = (n) => NODE_COLORS[Math.max(0, nodeIds.indexOf(n)) % NODE_COLORS.length];
+
+async function api(path, body) {
+  const opts = body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+  const res = await fetch(path, opts);
+  const data = await res.json();
+  if (!res.ok || data.error) { toast(data.error || res.statusText); throw new Error(data.error); }
+  return data;
+}
+function toast(msg) { const t = $('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', 4000); }
+const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// Colour RESP bytes: type tag, length, payload, and visible \r\n.
+function renderResp(text, breakLines = true) {
+  let out = '', i = 0;
+  const lines = text.split('\r\n');
+  for (let k = 0; k < lines.length; k++) {
+    const ln = lines[k];
+    if (k === lines.length - 1 && ln === '') break;
+    const m = /^([*$+\-:])(.*)$/.exec(ln);
+    const prevBulk = k > 0 && /^\$\d+$/.test(lines[k - 1]);
+    if (m && !prevBulk) {
+      const isLen = m[1] === '*' || m[1] === '$';
+      out += `<span class="t">${esc(m[1])}</span><span class="${isLen ? 'l' : 'd'}">${esc(m[2])}</span>`;
+    } else out += `<span class="d">${esc(ln)}</span>`;
+    if (k < lines.length - 1) out += `<span class="c">\\r\\n</span>${breakLines ? '\n' : ''}`;
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------- tabs / theme
+document.querySelectorAll('#nav button[data-tab]').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#nav button[data-tab]').forEach(x => x.classList.toggle('active', x === b));
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.id === 'tab-' + b.dataset.tab));
+  history.replaceState(null, '', '#' + b.dataset.tab);
+});
+$('theme').onclick = () => {
+  const root = document.documentElement;
+  const dark = root.dataset.theme ? root.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+  root.dataset.theme = dark ? 'light' : 'dark';
+};
+if (location.hash) document.querySelector(`#nav button[data-tab="${location.hash.slice(1)}"]`)?.click();
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' || !/^[1-5]$/.test(e.key)) return;
+  const b = document.querySelector(`#nav button[data-tab]:nth-child(${e.key})`); if (b) b.click();
+});
+
+// ---------------------------------------------------------------- 1. protocol
+const PRESETS = ['PING', 'SET greeting hello', 'GET greeting', 'GET nosuchkey', 'EXISTS greeting',
+  'SET session:9 abc EX 30', 'TTL session:9', 'DEL greeting', 'SET msg "two words"', 'FLY me to the moon'];
+$('presets').innerHTML = PRESETS.map(p => `<span class="chip">${esc(p)}</span>`).join('');
+$('presets').onclick = (e) => { if (e.target.classList.contains('chip')) { $('cmd').value = e.target.textContent; sendCmd(); } };
+$('sendCmd').onclick = sendCmd;
+$('cmd').onkeydown = (e) => { if (e.key === 'Enter') sendCmd(); };
+
+function explainRequest(sent) {
+  const lines = sent.split('\r\n').slice(0, -1);
+  const rows = [];
+  for (let k = 0; k < lines.length; k++) {
+    const ln = lines[k];
+    if (ln.startsWith('*')) rows.push([ln, `array of <b>${ln.slice(1)}</b> elements (the command and its arguments)`]);
+    else if (ln.startsWith('$')) {
+      const n = +ln.slice(1), data = lines[k + 1] ?? '';
+      rows.push([ln, `bulk string: the next <b>${n}</b> bytes are data`]);
+      rows.push([esc(data), `exactly ${n} bytes read, so no delimiter search is needed`]);
+      k++;
+    }
+  }
+  $('explainReq').innerHTML = rows.map(([a, b]) => `<tr><td>${a}<span style="color:var(--crlf);font-size:11px">\\r\\n</span></td><td>${b}</td></tr>`).join('');
+}
+
+async function sendCmd() {
+  const r = await api('/api/raw', { command: $('cmd').value, node: $('cmdNode').value });
+  $('sentWire').innerHTML = renderResp(r.sent);
+  $('recvWire').innerHTML = renderResp(r.received);
+  $('sentMeta').textContent = `${r.sent_len} bytes to ${r.node} :${r.port}`;
+  $('recvMeta').textContent = `${r.recv_len} bytes · ${r.type} · ${r.rtt_ms.toFixed(2)} ms round trip`;
+  explainRequest(r.sent);
+  $('routeInfo').innerHTML = r.route
+    ? `key <code>${esc(r.route.key)}</code> → xxhash64 <code>0x${r.route.hash}</code> → ${(r.route.pos * 100).toFixed(1)}% around the ring → <b style="color:${colorOf(r.route.node)}">${r.route.node}</b>`
+    : 'no key: sent to any node';
+}
+
+// ---------------------------------------------------------------- 2. framing
+let splitRunning = false;
+$('splitGo').onclick = async () => {
+  if (splitRunning) return; splitRunning = true; $('splitGo').disabled = true;
+  $('splitTimeline').innerHTML = ''; $('splitBuf').innerHTML = '<span class="muted">waiting…</span>'; $('splitState').innerHTML = '&nbsp;';
+  try {
+    // Run the real exchange first, then replay its recorded timing on screen.
+    const r = await api('/api/split', { command: $('splitCmd').value, chunk: +$('splitChunk').value, delay: +$('splitDelay').value });
+    let buffered = '';
+    const step = Math.max(25, Math.min(160, 2600 / r.events.length));
+    for (const ev of r.events) {
+      const row = document.createElement('div');
+      row.className = 'ev';
+      row.innerHTML = `<span class="tm">${ev.t.toFixed(1)} ms</span><span class="dir ${ev.dir}">${ev.dir === 'send' ? 'SEND' : 'REPLY'}</span><span class="by">${renderResp(ev.bytes, false) || '&nbsp;'}</span>`;
+      $('splitTimeline').prepend(row);
+      requestAnimationFrame(() => row.classList.add('show'));
+      if (ev.dir === 'send') {
+        buffered += ev.bytes;
+        $('splitBuf').innerHTML = renderResp(buffered, false);
+        const complete = buffered.length === r.total_bytes;
+        $('splitState').innerHTML = complete
+          ? '<span class="ok">✓ complete: parse() returns 1 command, leftover = ""</span>'
+          : `<span class="muted">incomplete: parse() returns 0 commands and keeps ${buffered.length} bytes as leftover</span>`;
+      }
+      await sleep(step);
+    }
+    const lastSend = r.events.filter(e => e.dir === 'send').pop();
+    const firstRecv = r.events.find(e => e.dir === 'recv');
+    $('splitState').innerHTML += `<br><span class="muted">${r.sends} separate send() calls over ${lastSend.t.toFixed(0)} ms. The reply came back ${(firstRecv.t - lastSend.t).toFixed(2)} ms after the <b>last</b> byte, never earlier.</span>`;
+  } finally { splitRunning = false; $('splitGo').disabled = false; }
+};
+
+$('pipeGo').onclick = async () => {
+  const r = await api('/api/pipeline', { count: +$('pipeN').value });
+  $('pipeLen').textContent = r.payload_len;
+  $('pipeWire').innerHTML = renderResp(r.payload, false);
+  $('pipeMeta').textContent = `· all ${r.replies.length} arrived in ${r.recv_calls} recv() call${r.recv_calls === 1 ? '' : 's'}`;
+  $('pipeReplies').innerHTML = r.commands.map((c, i) => `<tr><td>${esc(c)}</td><td class="mono">${renderResp(r.replies[i], false)}</td></tr>`).join('');
+};
+
+$('rttGo').onclick = async () => {
+  $('rttGo').disabled = true; $('rttNote').textContent = 'running…';
+  try {
+    const r = await api('/api/rtt', { count: +$('rttN').value });
+    const max = Math.max(r.sequential_ms, r.pipelined_ms);
+    const bar = (label, ms, color) => `<div class="bar"><span>${label}</span><div class="track"><div class="fill" style="width:0;background:${color}" data-w="${(ms / max * 100).toFixed(1)}"></div></div><span class="mono">${ms.toFixed(0)} ms</span></div>`;
+    $('rttBars').innerHTML = bar('one at a time', r.sequential_ms, 'var(--warn)') + bar('pipelined', r.pipelined_ms, 'var(--ok)');
+    requestAnimationFrame(() => document.querySelectorAll('#rttBars .fill').forEach(f => f.style.width = f.dataset.w + '%'));
+    $('rttNote').innerHTML = `<b>${r.speedup.toFixed(1)}×</b> faster for ${r.count.toLocaleString()} PINGs. One at a time pays a full network round trip per command. Pipelining pays it roughly once.`;
+  } finally { $('rttGo').disabled = false; }
+};
+
+// ---------------------------------------------------------------- 3. concurrency
+function drawDots(n, on = 0) { $('concDots').innerHTML = Array.from({ length: n }, (_, i) => `<i class="${i < on ? 'on' : ''}"></i>`).join(''); }
+$('concN').oninput = () => { $('concLabel').textContent = $('concN').value; drawDots(+$('concN').value); };
+drawDots(200);
+$('concGo').onclick = async () => {
+  const n = +$('concN').value; drawDots(n); $('concGo').disabled = true;
+  try {
+    const r = await api('/api/concurrency', { clients: n });
+    const dots = $('concDots').children;
+    for (let i = 0; i < r.answered; i++) { dots[i].classList.add('on'); if (i % 5 === 0) await sleep(4); }
+    $('cs1').innerHTML = `${r.clients}<small> in ${r.open_ms.toFixed(0)} ms</small>`;
+    $('cs2').innerHTML = `<span class="${r.answered === r.clients ? 'ok' : 'bad'}">${r.answered}/${r.clients}</span><small> in ${r.serve_ms.toFixed(0)} ms</small>`;
+    $('cs3').innerHTML = `1<small> · pid ${r.pid} (${r.node})</small>`;
+    $('cs4').innerHTML = r.threads == null ? '-' : `${r.threads}<small> for ${r.clients} clients</small>`;
+  } finally { $('concGo').disabled = false; }
+};
+
+// ---------------------------------------------------------------- 4. cluster
+let ringData = null;
+function drawRing(hit) {
+  const svg = $('ring'), cx = 200, cy = 200, R = 150;
+  let s = `<circle cx="${cx}" cy="${cy}" r="${R}" fill="none" stroke="var(--line)" stroke-width="2"/>`;
+  const pt = (pos, r) => { const a = pos * 2 * Math.PI - Math.PI / 2; return [cx + r * Math.cos(a), cy + r * Math.sin(a)]; };
+  for (const p of ringData.points) {
+    const [x1, y1] = pt(p.pos, R - 7), [x2, y2] = pt(p.pos, R + 7);
+    s += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${colorOf(p.node)}" stroke-width="1.6" opacity="${hit && hit.node !== p.node ? .35 : .9}"/>`;
+  }
+  s += `<text x="${cx}" y="${cy - R - 16}" text-anchor="middle">0</text>`;
+  if (hit) {
+    // The key's hash, and the clockwise walk to the first point that owns it.
+    const owner = ringData.points.find(p => p.pos >= hit.pos) || ringData.points[0];
+    const end = owner.pos >= hit.pos ? owner.pos : owner.pos + 1;
+    const [kx, ky] = pt(hit.pos, R + 26), [ox, oy] = pt(owner.pos, R);
+    let arc = '';
+    for (let t = hit.pos; t <= end; t += 0.002) { const [x, y] = pt(t, R + 18); arc += `${arc ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)} `; }
+    s += `<path d="${arc}" fill="none" stroke="${colorOf(hit.node)}" stroke-width="3" stroke-linecap="round"/>`;
+    s += `<circle cx="${kx}" cy="${ky}" r="6" fill="var(--ink)"/>`;
+    s += `<circle cx="${ox}" cy="${oy}" r="7" fill="${colorOf(hit.node)}" stroke="var(--panel)" stroke-width="2"/>`;
+    s += `<text x="${cx}" y="${cy - 4}" text-anchor="middle" style="font-size:15px;fill:var(--ink)">${esc(hit.key)}</text>`;
+    s += `<text x="${cx}" y="${cy + 18}" text-anchor="middle" style="font-size:15px;font-weight:700;fill:${colorOf(hit.node)}">→ ${hit.node}</text>`;
+  } else {
+    nodeIds.forEach((n, i) => s += `<text x="${cx}" y="${cy - 16 + i * 18}" text-anchor="middle" style="font-size:13px;fill:${colorOf(n)}">■ ${n}</text>`);
+  }
+  svg.innerHTML = s;
+}
+$('ringGo').onclick = async () => {
+  const r = await api('/api/route', { key: $('ringKey').value });
+  drawRing(r);
+  $('ringInfo').innerHTML = `hash <code>0x${r.hash}</code> lands at ${(r.pos * 100).toFixed(2)}%. Walk clockwise to the first point: <b style="color:${colorOf(r.node)}">${r.node}</b>`;
+};
+$('ringKey').onkeydown = (e) => { if (e.key === 'Enter') $('ringGo').click(); };
+
+$('seedGo').onclick = async () => {
+  $('seedGo').disabled = true;
+  try { await api('/api/seed', { count: 6000 }); refresh(); } finally { $('seedGo').disabled = false; }
+};
+$('loadGo').onclick = async () => {
+  if (lastState?.load.running) await api('/api/load/stop', {});
+  else await api('/api/load/start', { clients: +$('loadN').value });
+  refresh();
+};
+$('verifyGo').onclick = async () => {
+  $('verifyGo').disabled = true;
+  try {
+    const r = await api('/api/verify', {});
+    $('verifyBars').innerHTML = '<div class="label">Seeded keys readable, per owning node</div>' + nodeIds.map(n => {
+      const pct = r.owned[n] ? r.present[n] / r.owned[n] * 100 : 0;
+      const note = r.errors[n] ? `<span class="bad">down</span>` : `${r.present[n]}/${r.owned[n]}`;
+      return `<div class="bar"><span style="color:${colorOf(n)}">${n}</span><div class="track"><div class="fill" style="width:${pct}%;background:${colorOf(n)}"></div></div><span class="mono">${note}</span></div>`;
+    }).join('');
+  } finally { $('verifyGo').disabled = false; }
+};
+
+function nodeCard(n) {
+  const info = n.info || {};
+  const hr = info.hit_rate !== undefined ? (parseFloat(info.hit_rate) * 100).toFixed(1) + '%' : '-';
+  return `<div class="card node" style="--nc:${colorOf(n.id)}">
+    <div class="head"><b>${n.id}</b><span class="muted mono">:${n.port}</span>
+      <span class="pill ${n.alive ? 'up' : 'down'}" style="margin-left:auto">${n.alive ? 'UP' : 'DOWN'}</span></div>
+    <div class="kv">
+      <span>pid</span><span class="mono">${n.pid ?? '-'}</span>
+      <span>keys</span><span>${info.keys ?? '-'} / ${info.capacity ?? '-'}</span>
+      <span>hit rate</span><span>${hr}</span>
+      <span>serving</span><span>${n.alive ? Math.round(n.ops).toLocaleString() + ' ops/s' : `<span class="bad">${Math.round(n.errs).toLocaleString()} err/s</span>`}</span>
+    </div>
+    <div class="row" style="margin-bottom:10px">
+      ${n.alive ? `<button class="btn danger" data-kill="${n.id}">kill -9</button>` : `<button class="btn primary" data-start="${n.id}">Restart (replay WAL)</button>`}
+    </div>
+    <div class="log">${n.log.map(l => esc(l.replace(/^\S+ \S+ (cache\.\w+ )?/, '').replace(/dir=\S+ /, ''))).join('\n')}</div>
+  </div>`;
+}
+$('nodeCards').onclick = async (e) => {
+  const k = e.target.dataset.kill, s = e.target.dataset.start;
+  if (!k && !s) return;
+  e.target.disabled = true;
+  try { await api(k ? '/api/kill' : '/api/start', { node: k || s }); } finally { refresh(); }
+};
+
+function drawChart(hist) {
+  const W = 600, H = 180, pad = 4;
+  const maxV = Math.max(10, ...hist.flatMap(h => [...Object.values(h.ok), h.err])) * 1.15;
+  const N = 120, x = (i) => pad + (W - 2 * pad) * (i + (N - hist.length)) / (N - 1), y = (v) => H - pad - (H - 2 * pad) * v / maxV;
+  const line = (get) => hist.map((h, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(get(h)).toFixed(1)}`).join(' ');
+  let s = '';
+  for (let g = 1; g <= 3; g++) s += `<line x1="0" x2="${W}" y1="${H * g / 4}" y2="${H * g / 4}" stroke="var(--line)" stroke-dasharray="3 4" vector-effect="non-scaling-stroke"/>`;
+  if (hist.length > 1) {
+    for (const n of nodeIds) s += `<path d="${line(h => h.ok[n] || 0)}" fill="none" stroke="${colorOf(n)}" stroke-width="2.2" vector-effect="non-scaling-stroke"/>`;
+    s += `<path d="${line(h => h.err)}" fill="none" stroke="var(--bad)" stroke-width="2" stroke-dasharray="5 4" vector-effect="non-scaling-stroke"/>`;
+  }
+  $('chart').innerHTML = s;
+  $('chartLegend').innerHTML = nodeIds.map(n => `<span><i style="background:${colorOf(n)}"></i>${n} ops/s</span>`).join('') +
+    '<span><i style="background:var(--bad)"></i>errors/s (dead shard, dashed)</span>';
+  const last = hist[hist.length - 1];
+  const total = last ? Object.values(last.ok).reduce((a, b) => a + b, 0) : 0;
+  $('loadInfo').innerHTML = last ? `now: <b class="ok">${Math.round(total).toLocaleString()}</b> ops/s served in total · <b class="bad">${Math.round(last.err).toLocaleString()}</b> errors/s` : '';
+}
+
+let lastState = null;
+async function refresh() {
+  let st;
+  try { st = await (await fetch('/api/state')).json(); } catch (e) { return; }
+  lastState = st;
+  if (!nodeIds.length) {
+    nodeIds = st.nodes.map(n => n.id);
+    $('cmdNode').innerHTML = '<option value="auto">route by key</option>' + nodeIds.map(n => `<option>${n}</option>`).join('');
+    ringData = await api('/api/ring'); drawRing();
+    sendCmd();  // so the Protocol tab opens with a real exchange on screen
+  }
+  $('nodeCards').innerHTML = st.nodes.map(nodeCard).join('');
+  drawChart(st.load.history);
+  $('loadGo').textContent = st.load.running ? `Stop load (${st.load.clients} clients)` : '2 · Start load';
+  $('loadGo').classList.toggle('danger', st.load.running);
+  $('loadGo').classList.toggle('primary', !st.load.running);
+  $('events').innerHTML = st.events.slice().reverse().map(e =>
+    `<div class="${e.kind}"><span class="muted mono">${new Date(e.t * 1000).toLocaleTimeString()}</span>  ${esc(e.text)}</div>`).join('') || '<span class="muted">nothing yet</span>';
+}
+refresh(); setInterval(refresh, 700);
+
+// ---------------------------------------------------------------- 5. security
+const ATTACK_INFO = {
+  penetration: ['Cache penetration', 'GETs for keys that exist nowhere, so every one lands on the database'],
+  hot_flood: ['Hot-key flood', 'one connection hammering 1 to 3 keys at around 10,000 requests a second'],
+  brute_force: ['Password brute force', '4 connections guessing AUTH passwords'],
+  slowloris: ['Slowloris', '20 connections each trickling a command that never finishes'],
+};
+$('attackBtns').innerHTML = Object.entries(ATTACK_INFO).map(([k, [name, desc]]) =>
+  `<button class="btn" data-attack="${k}" style="text-align:left;white-space:normal"><b>${name}</b><br><span class="muted" style="font-size:12px">${desc}</span></button>`).join('');
+let labState = null;
+document.querySelectorAll('[data-auth]').forEach(b => b.onclick = async () => {
+  const r = await api('/api/lab/auth', { how: b.dataset.auth });
+  $('authSteps').innerHTML = r.steps.map(st => `<tr><td>${esc(st.sent)}</td><td class="${st.ok ? 'ok' : 'bad'}">${esc(st.reply)}</td><td class="muted" style="width:1%;white-space:nowrap">${st.ms} ms</td></tr>`).join('');
+});
+$('tlsGo').onclick = async () => {
+  const r = await api('/api/lab/tls', {});
+  $('tlsOut').innerHTML = `<tr><td>trusted client</td><td class="ok">${esc(r.verified.version)} · ${esc(r.verified.cipher)} · issuer "${esc(r.verified.issuer)}"</td></tr>
+    <tr><td>untrusted certificate</td><td class="${r.untrusted.startsWith('rejected') ? 'ok' : 'bad'}">${esc(r.untrusted)}</td></tr>
+    <tr><td>plaintext client</td><td class="${r.plaintext.startsWith('refused') ? 'ok' : 'bad'}">${esc(r.plaintext)}</td></tr>`;
+};
+$('modeBtns').onclick = async (e) => { const m = e.target.dataset.mode; if (m) { await api('/api/lab/mode', { mode: m }); labRefresh(); } };
+$('legitBtn').onclick = async () => { await api('/api/lab/legit', { on: !labState?.legit }); labRefresh(); };
+$('attackBtns').onclick = async (e) => {
+  const b = e.target.closest('[data-attack]'); if (!b) return;
+  const k = b.dataset.attack;
+  await api('/api/lab/attack', { kind: k, on: !labState?.attacks.includes(k) }); labRefresh();
+};
+
+function drawLabChart(st) {
+  const W = 600, H = 200, pad = 4, hist = st.history, N = 120;
+  const maxV = Math.max(st.capacity * 1.3, ...hist.map(h => h.legit + h.attack)) * 1.05;
+  const x = (i) => pad + (W - 2 * pad) * (i + (N - hist.length)) / (N - 1), y = (v) => H - pad - (H - 2 * pad) * v / maxV;
+  const line = (get) => hist.map((h, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(get(h)).toFixed(1)}`).join(' ');
+  let s = `<line x1="0" x2="${W}" y1="${y(st.capacity)}" y2="${y(st.capacity)}" stroke="var(--muted)" stroke-dasharray="6 5" vector-effect="non-scaling-stroke"/>`;
+  if (hist.length > 1) {
+    s += `<path d="${line(h => h.legit)}" fill="none" stroke="var(--ok)" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+    s += `<path d="${line(h => h.attack)}" fill="none" stroke="var(--bad)" stroke-width="2.2" vector-effect="non-scaling-stroke"/>`;
+  }
+  $('labChart').innerHTML = s;
+  const last = hist[hist.length - 1] || { legit: 0, attack: 0 };
+  $('labInfo').innerHTML = `now: <b class="ok">${Math.round(last.legit).toLocaleString()}</b> q/s legitimate · <b class="bad">${Math.round(last.attack).toLocaleString()}</b> q/s from attackers · capacity ${st.capacity.toLocaleString()} q/s`;
+}
+
+async function labRefresh() {
+  let st;
+  try { st = await (await fetch('/api/lab/state')).json(); } catch (e) { return; }
+  labState = st;
+  const mode = st.guard.mode;
+  document.querySelectorAll('#modeBtns [data-mode]').forEach(b => {
+    b.classList.toggle('primary', b.dataset.mode === mode);
+    b.disabled = b.dataset.mode === 'ml' && !st.ml_available;
+  });
+  $('modeNote').textContent = st.ml_available ? '' : 'no model yet: run tools/train_guard.py';
+  $('legitBtn').textContent = st.legit ? 'Stop legitimate traffic' : 'Start legitimate traffic';
+  $('legitBtn').classList.toggle('primary', !st.legit);
+  document.querySelectorAll('[data-attack]').forEach(b => b.classList.toggle('danger', st.attacks.includes(b.dataset.attack)));
+  drawLabChart(st);
+  const conns = st.guard.connections.filter(c => c.name !== '' || c.verdict !== 'normal' || c.rate > 0)
+    .sort((a, b) => (a.verdict === 'normal') - (b.verdict === 'normal') || b.rate - a.rate);
+  $('connTable').innerHTML = '<tr><td class="muted">client</td><td class="muted">verdict</td><td class="muted">req/s</td><td class="muted">miss</td><td class="muted">top key</td><td class="muted">refused</td></tr>' +
+    conns.slice(0, 24).map(c => {
+      const atk = c.verdict !== 'normal';
+      return `<tr><td>${esc(c.name || '(unnamed #' + c.id + ')')}</td><td class="${atk ? 'bad' : 'ok'}"><b>${esc(c.verdict)}</b>${atk ? ` ${Math.round(c.confidence * 100)}%` : ''}</td><td>${Math.round(c.rate).toLocaleString()}</td><td>${(c.miss_ratio * 100).toFixed(0)}%</td><td>${(c.top_key_share * 100).toFixed(0)}%</td><td>${c.rejected.toLocaleString()}</td></tr>`;
+    }).join('');
+  $('labEvents').innerHTML = st.guard.flags.slice().reverse().map(f =>
+    `<div class="bad"><span class="muted mono">${new Date(f.t * 1000).toLocaleTimeString()}</span>  ${esc(f.name || 'unnamed')} flagged <b>${esc(f.verdict)}</b> (${Math.round(f.confidence * 100)}%)</div>`).join('') || '<span class="muted">no flags yet</span>';
+}
+labRefresh(); setInterval(labRefresh, 1000);
+</script>
+</body>
+</html>

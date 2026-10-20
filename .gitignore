@@ -11,3 +11,5 @@ cluster.json
 data/
 traces/
 traces_train/
+certs/
+results/guard/*.jsonl

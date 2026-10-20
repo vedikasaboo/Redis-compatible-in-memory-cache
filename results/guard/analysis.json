@@ -1,0 +1,242 @@
+{
+ "test": {
+  "cm_ml": [
+   [
+    658,
+    0,
+    0,
+    0,
+    0
+   ],
+   [
+    1,
+    44,
+    0,
+    0,
+    0
+   ],
+   [
+    0,
+    0,
+    30,
+    0,
+    0
+   ],
+   [
+    43,
+    0,
+    0,
+    135,
+    0
+   ],
+   [
+    0,
+    0,
+    0,
+    0,
+    320
+   ]
+  ],
+  "cm_rules": [
+   [
+    658,
+    0,
+    0,
+    0,
+    0
+   ],
+   [
+    1,
+    44,
+    0,
+    0,
+    0
+   ],
+   [
+    1,
+    0,
+    29,
+    0,
+    0
+   ],
+   [
+    43,
+    0,
+    0,
+    135,
+    0
+   ],
+   [
+    63,
+    0,
+    0,
+    0,
+    257
+   ]
+  ],
+  "sweep": [
+   {
+    "tau": 0.5,
+    "attack_recall": 0.9232111692844677,
+    "legit_flagged": 0,
+    "legit_total": 658
+   },
+   {
+    "tau": 0.6,
+    "attack_recall": 0.9232111692844677,
+    "legit_flagged": 0,
+    "legit_total": 658
+   },
+   {
+    "tau": 0.7,
+    "attack_recall": 0.9232111692844677,
+    "legit_flagged": 0,
+    "legit_total": 658
+   },
+   {
+    "tau": 0.8,
+    "attack_recall": 0.9232111692844677,
+    "legit_flagged": 0,
+    "legit_total": 658
+   },
+   {
+    "tau": 0.9,
+    "attack_recall": 0.9232111692844677,
+    "legit_flagged": 0,
+    "legit_total": 658
+   },
+   {
+    "tau": 0.95,
+    "attack_recall": 0.9232111692844677,
+    "legit_flagged": 0,
+    "legit_total": 658
+   },
+   {
+    "tau": 0.99,
+    "attack_recall": 0.9232111692844677,
+    "legit_flagged": 0,
+    "legit_total": 658
+   }
+  ]
+ },
+ "stealth": {
+  "cm_ml": [
+   [
+    776,
+    0,
+    0,
+    0,
+    1
+   ],
+   [
+    2,
+    43,
+    0,
+    0,
+    0
+   ],
+   [
+    2,
+    0,
+    58,
+    0,
+    0
+   ],
+   [
+    6,
+    0,
+    0,
+    12,
+    0
+   ],
+   [
+    0,
+    0,
+    0,
+    0,
+    66
+   ]
+  ],
+  "cm_rules": [
+   [
+    777,
+    0,
+    0,
+    0,
+    0
+   ],
+   [
+    45,
+    0,
+    0,
+    0,
+    0
+   ],
+   [
+    46,
+    0,
+    14,
+    0,
+    0
+   ],
+   [
+    6,
+    0,
+    0,
+    12,
+    0
+   ],
+   [
+    12,
+    0,
+    0,
+    0,
+    54
+   ]
+  ],
+  "sweep": [
+   {
+    "tau": 0.5,
+    "attack_recall": 0.9470899470899471,
+    "legit_flagged": 1,
+    "legit_total": 777
+   },
+   {
+    "tau": 0.6,
+    "attack_recall": 0.9470899470899471,
+    "legit_flagged": 1,
+    "legit_total": 777
+   },
+   {
+    "tau": 0.7,
+    "attack_recall": 0.9470899470899471,
+    "legit_flagged": 1,
+    "legit_total": 777
+   },
+   {
+    "tau": 0.8,
+    "attack_recall": 0.9470899470899471,
+    "legit_flagged": 1,
+    "legit_total": 777
+   },
+   {
+    "tau": 0.9,
+    "attack_recall": 0.9470899470899471,
+    "legit_flagged": 1,
+    "legit_total": 777
+   },
+   {
+    "tau": 0.95,
+    "attack_recall": 0.9470899470899471,
+    "legit_flagged": 0,
+    "legit_total": 777
+   },
+   {
+    "tau": 0.99,
+    "attack_recall": 0.9365079365079365,
+    "legit_flagged": 0,
+    "legit_total": 777
+   }
+  ]
+ }
+}

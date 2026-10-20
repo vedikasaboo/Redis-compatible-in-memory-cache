@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# demo.sh — rehearsable end-to-end demo.
+# demo.sh, rehearsable end-to-end demo.
 #
 #   1. Launch a 3-node cluster with persistence enabled
 #   2. Show keys spreading across shards via consistent hashing
@@ -50,7 +50,7 @@ start_node() {
 }
 
 # ---------------------------------------------------------------------------
-step "STEP 1 — Launch a 3-node cluster"
+step "STEP 1: Launch a 3-node cluster"
 cat > "$CONFIG" <<EOF
 {
   "nodes": [
@@ -62,7 +62,7 @@ cat > "$CONFIG" <<EOF
 }
 EOF
 say "Each node is an independent asyncio server speaking RESP over TCP,"
-say "with its own write-ahead log on disk. There is no proxy — routing"
+say "with its own write-ahead log on disk. There is no proxy, routing"
 say "happens in the client, using a consistent hash ring."
 echo ""
 for i in 0 1 2; do
@@ -71,7 +71,7 @@ done
 pause
 
 # ---------------------------------------------------------------------------
-step "STEP 2 — Consistent hashing spreads the keyspace"
+step "STEP 2: Consistent hashing spreads the keyspace"
 say "Writing 6,000 keys. The client hashes each key onto the ring and"
 say "sends it to whichever node owns that arc. Same hash everywhere, so"
 say "every client agrees on placement without coordinating."
@@ -93,8 +93,8 @@ PY
 pause
 
 # ---------------------------------------------------------------------------
-step "STEP 3 — Drive load, watch the hit rate"
-say "Replaying a skewed (Zipfian) access pattern — a few hot keys, a long"
+step "STEP 3: Drive load, watch the hit rate"
+say "Replaying a skewed (Zipfian) access pattern, a few hot keys, a long"
 say "cold tail, which is what real caches see. Hit rate is read live from"
 say "each node's INFO command."
 echo ""
@@ -125,9 +125,9 @@ PY
 pause
 
 # ---------------------------------------------------------------------------
-step "STEP 4 — kill -9 one node"
+step "STEP 4: kill -9 one node"
 VICTIM_PORT=$((BASE_PORT + 1))
-say "Killing node-1 with SIGKILL — no graceful shutdown, no chance to"
+say "Killing node-1 with SIGKILL, no graceful shutdown, no chance to"
 say "flush anything. This is the ungraceful case, not a clean stop."
 kill -9 "${PIDS[1]}" 2>/dev/null
 sleep 0.5
@@ -165,7 +165,7 @@ say "keys owned by node-1 error, and they error immediately."
 pause
 
 # ---------------------------------------------------------------------------
-step "STEP 5 — Restart node-1, recover from the write-ahead log"
+step "STEP 5: Restart node-1, recover from the write-ahead log"
 say "Restarting. On startup it replays its WAL before it opens the"
 say "listening socket, so no client can ever see a half-recovered cache."
 echo ""

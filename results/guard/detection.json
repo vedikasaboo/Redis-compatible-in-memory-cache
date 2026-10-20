@@ -1,0 +1,191 @@
+{
+ "features": [
+  "rate",
+  "get_ratio",
+  "set_ratio",
+  "miss_ratio",
+  "distinct_ratio",
+  "top_key_share",
+  "error_ratio",
+  "auth_failures",
+  "auth_failures_total",
+  "bytes_per_cmd",
+  "pending_bytes",
+  "stalled_windows"
+ ],
+ "importance": {
+  "rate": 7966.1,
+  "get_ratio": 173.1,
+  "set_ratio": 6954.8,
+  "miss_ratio": 1411.5,
+  "distinct_ratio": 8578.0,
+  "top_key_share": 2749.5,
+  "error_ratio": 8267.5,
+  "auth_failures": 1224.9,
+  "auth_failures_total": 1.6,
+  "bytes_per_cmd": 1102.6,
+  "pending_bytes": 9739.2,
+  "stalled_windows": 0.0
+ },
+ "confidence": 0.8,
+ "test": {
+  "ml": {
+   "normal": {
+    "precision": 0.9373219373219374,
+    "recall": 1.0,
+    "support": 658
+   },
+   "penetration": {
+    "precision": 1.0,
+    "recall": 0.9777777777777777,
+    "support": 45
+   },
+   "hot_flood": {
+    "precision": 1.0,
+    "recall": 1.0,
+    "support": 30
+   },
+   "brute_force": {
+    "precision": 1.0,
+    "recall": 0.7584269662921348,
+    "support": 178
+   },
+   "slowloris": {
+    "precision": 1.0,
+    "recall": 1.0,
+    "support": 320
+   },
+   "false_alarm_by_kind": {
+    "ok:app": 0.0,
+    "ok:buggy": 0.0,
+    "ok:busy": 0.0,
+    "ok:idle": 0.0,
+    "ok:typo": 0.0,
+    "ok:uploader": 0.0,
+    "ok:viral": 0.0,
+    "ok:warmer": 0.0
+   },
+   "attack_windows_caught": 0.9232111692844677,
+   "normal_windows_flagged": 0.0
+  },
+  "rules": {
+   "normal": {
+    "precision": 0.8590078328981723,
+    "recall": 1.0,
+    "support": 658
+   },
+   "penetration": {
+    "precision": 1.0,
+    "recall": 0.9777777777777777,
+    "support": 45
+   },
+   "hot_flood": {
+    "precision": 1.0,
+    "recall": 0.9666666666666667,
+    "support": 30
+   },
+   "brute_force": {
+    "precision": 1.0,
+    "recall": 0.7584269662921348,
+    "support": 178
+   },
+   "slowloris": {
+    "precision": 1.0,
+    "recall": 0.803125,
+    "support": 320
+   },
+   "false_alarm_by_kind": {
+    "ok:app": 0.0,
+    "ok:buggy": 0.0,
+    "ok:busy": 0.0,
+    "ok:idle": 0.0,
+    "ok:typo": 0.0,
+    "ok:uploader": 0.0,
+    "ok:viral": 0.0,
+    "ok:warmer": 0.0
+   },
+   "attack_windows_caught": 0.8115183246073299,
+   "normal_windows_flagged": 0.0
+  }
+ },
+ "stealth": {
+  "ml": {
+   "normal": {
+    "precision": 0.9872773536895675,
+    "recall": 0.9987129987129987,
+    "support": 777
+   },
+   "penetration": {
+    "precision": 1.0,
+    "recall": 0.9555555555555556,
+    "support": 45
+   },
+   "hot_flood": {
+    "precision": 1.0,
+    "recall": 0.9666666666666667,
+    "support": 60
+   },
+   "brute_force": {
+    "precision": 1.0,
+    "recall": 0.6666666666666666,
+    "support": 18
+   },
+   "slowloris": {
+    "precision": 0.9850746268656716,
+    "recall": 1.0,
+    "support": 66
+   },
+   "false_alarm_by_kind": {
+    "ok:app": 0.0,
+    "ok:buggy": 0.0,
+    "ok:busy": 0.0,
+    "ok:idle": 0.0,
+    "ok:typo": 0.0,
+    "ok:uploader": 0.007407407407407408,
+    "ok:viral": 0.0,
+    "ok:warmer": 0.0
+   },
+   "attack_windows_caught": 0.9470899470899471,
+   "normal_windows_flagged": 0.001287001287001287
+  },
+  "rules": {
+   "normal": {
+    "precision": 0.8769751693002258,
+    "recall": 1.0,
+    "support": 777
+   },
+   "penetration": {
+    "precision": null,
+    "recall": 0.0,
+    "support": 45
+   },
+   "hot_flood": {
+    "precision": 1.0,
+    "recall": 0.23333333333333334,
+    "support": 60
+   },
+   "brute_force": {
+    "precision": 1.0,
+    "recall": 0.6666666666666666,
+    "support": 18
+   },
+   "slowloris": {
+    "precision": 1.0,
+    "recall": 0.8181818181818182,
+    "support": 66
+   },
+   "false_alarm_by_kind": {
+    "ok:app": 0.0,
+    "ok:buggy": 0.0,
+    "ok:busy": 0.0,
+    "ok:idle": 0.0,
+    "ok:typo": 0.0,
+    "ok:uploader": 0.0,
+    "ok:viral": 0.0,
+    "ok:warmer": 0.0
+   },
+   "attack_windows_caught": 0.42328042328042326,
+   "normal_windows_flagged": 0.0
+  }
+ }
+}

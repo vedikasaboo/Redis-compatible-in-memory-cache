@@ -12,6 +12,7 @@ REQUESTS (always an array of bulk strings), while replies can be any of
 the five RESP types, so read_reply() below handles those.
 """
 import socket
+import ssl
 
 from cache.resp import ProtocolError, encode
 
@@ -21,18 +22,36 @@ class CacheError(Exception):
 
 
 class Client:
-    def __init__(self, host: str = "127.0.0.1", port: int = 6390, timeout: float = 5.0):
+    def __init__(self, host: str = "127.0.0.1", port: int = 6390, timeout: float = 5.0,
+                 password: str | None = None, tls: "ssl.SSLContext | bool | None" = None,
+                 name: str | None = None):
+        """
+        password — sent with AUTH right after connecting.
+        tls      — True for a default verifying context, or an SSLContext
+                   (e.g. one trusting a self-signed CA via load_verify_locations).
+        name     — sent with CLIENT SETNAME, so the server's logs and the
+                   guard can tell connections apart.
+        """
         self.host = host
         self.port = port
         self.timeout = timeout
+        self.password = password
+        self.tls = ssl.create_default_context() if tls is True else tls
+        self.name = name
         self._sock = None
         self._f = None
 
     def connect(self) -> "Client":
         self._sock = socket.create_connection((self.host, self.port), timeout=self.timeout)
+        if self.tls:
+            self._sock = self.tls.wrap_socket(self._sock, server_hostname=self.host)
         # A buffered file object gives readline()/readexactly-style reads,
         # which is what makes reply framing straightforward here.
         self._f = self._sock.makefile("rb")
+        if self.password is not None:
+            self.command("AUTH", self.password)
+        if self.name:
+            self.command("CLIENT", "SETNAME", self.name)
         return self
 
     def close(self) -> None:

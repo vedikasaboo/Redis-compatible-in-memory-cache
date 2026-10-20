@@ -1,11 +1,14 @@
 # Evict
 
-A Redis-compatible in-memory cache built from scratch in Python with
-`asyncio` — RESP over TCP, event-loop concurrency, a consistent-hash
-cluster, crash recovery via write-ahead logging, and a learned eviction
-policy benchmarked honestly against the classical ones.
+An attack-aware, Redis-compatible in-memory cache built from scratch in
+Python with `asyncio` — RESP over TCP, event-loop concurrency, a
+consistent-hash cluster, crash recovery via write-ahead logging, a learned
+eviction policy, and protocol-level security: AUTH, TLS, and an ML intrusion
+detector that spots and throttles attacks on the cache from each
+connection's traffic.
 
-Real `redis-cli` and `redis-benchmark` drive it unmodified.
+Real `redis-cli` and `redis-benchmark` drive it unmodified, including over
+TLS with a password.
 
 ---
 
@@ -50,7 +53,7 @@ Real `redis-cli` and `redis-benchmark` drive it unmodified.
     └──────────────────┘
 ```
 
-Four independent pieces, each with its own document:
+Five independent pieces, each with its own document:
 
 | Piece | Where | Notes |
 |---|---|---|
@@ -59,6 +62,7 @@ Four independent pieces, each with its own document:
 | Consistent-hash cluster | `cache/hashring.py`, `cache/cluster.py` | [NETWORKING.md](NETWORKING.md) §4 |
 | WAL + snapshots | `cache/wal.py`, `cache/snapshot.py` | [NETWORKING.md](NETWORKING.md) §5 |
 | Eviction + ML | `cache/eviction.py`, `cache/ml_policy.py` | below |
+| Security: AUTH, TLS, attack detection | `cache/security.py`, `cache/guard.py` | [SECURITY.md](SECURITY.md) |
 
 ---
 
@@ -68,11 +72,12 @@ All measured on this machine (M-series MacBook Air, macOS 14, Python 3.11).
 
 ### Throughput
 
-Measured with `redis-benchmark -n 10000`, the real Redis client:
+Measured with `redis-benchmark -n 100000`, the real Redis client, median
+of three runs:
 
 | | SET | GET |
 |---|---:|---:|
-| **This cache** (Python, single-threaded) | ~100,000/s | ~120,000/s |
+| **This cache** (Python, single-threaded) | ~100,000/s | ~110,000/s |
 | Real Redis 8.8.0 (C), same machine | 215,517/s | 221,239/s |
 | Real Redis, pipelined `-P 16` | 1,562,500/s | 2,127,660/s |
 
@@ -80,6 +85,11 @@ Within ~2× of C Redis from pure Python, single-threaded. Run-to-run
 variance is a few percent, so these are rounded rather than reported to the
 digit. The pipelining row is why the parser had to handle many commands per
 read in the first place.
+
+The security layer costs about 3–5% with every feature switched off (GET
+was ~115,000/s before it): the request path checks session state and the
+guard's verdict before each command. With the guard on, every command also
+updates its connection's traffic counters.
 
 ### Durability modes (8 concurrent clients)
 
@@ -204,6 +214,42 @@ where access patterns defeat recency and frequency outright — but there it
 is not a marginal improvement, it is the difference between a cache that
 works and one returning 0%.
 
+### Security: detecting attacks on the cache (full write-up: [SECURITY.md](SECURITY.md))
+
+The guard turns each connection's traffic into features every second and
+classifies it as normal or one of four attacks — cache penetration, hot-key
+flood, password brute force, slowloris — then rate-limits or disconnects.
+Each attack has a legitimate look-alike in the test traffic (a cache warmer
+that misses as often as penetration, a viral key as concentrated as a
+flood, a buggy client that gets errors, a 1 MB uploader with long partial
+commands, a user who mistypes the password), so a detector cannot score
+well by flagging everything unusual.
+
+Recall on held-out traffic. Legitimate windows flagged: 0 of 658 on the
+test set for both detectors; on the stealth set 0 of 777 for rules and 1 of
+777 for ML (a 1 MB uploader window):
+
+| | ML | Rules | ML, stealth | Rules, stealth |
+|---|---:|---:|---:|---:|
+| penetration | 97.8% | 97.8% | **95.6%** | 0% |
+| hot_flood | 100% | 96.7% | **96.7%** | 23.3% |
+| slowloris | 100% | 80.3% | 100% | 81.8% |
+
+The model's edge is **low-intensity attacks** that sit under fixed rule
+thresholds. Brute force is acted on only after 3 failed AUTHs on a
+connection, for both detectors, so a mistyped password is never punished.
+End to end, all four attacks at once against a real server:
+
+| | Guard off | ML guard |
+|---|---:|---:|
+| Penetration queries reaching the database | 13,440 | **1,097** (−92%) |
+| Flood requests served | 160,600 | **12,314** (−92%) |
+| Time to detect penetration, flood, slowloris | – | **0.97 s** |
+| Legitimate requests refused | 0 / 216,724 | **0 / 216,860** |
+
+Password guessing is held to about 2 a second by the per-IP AUTH backoff
+(40 guesses in 18 s); the guard's disconnects barely change that.
+
 ## Running it
 
 ```bash
@@ -230,6 +276,17 @@ python tools/launch_cluster.py --nodes 3 --data-root ./data
 # the full demo (cluster, load, kill -9, WAL recovery) — narrated
 ./demo.sh
 
+# with security: password, TLS, and the ML attack detector
+./tools/make_certs.sh                           # local CA + server certificate
+python -m cache.server --requirepass s3cret \
+    --tls-cert certs/server.pem --tls-key certs/server.key \
+    --guard ml --guard-model models/guard.txt
+redis-cli --tls --cacert certs/ca.pem -a s3cret PING
+redis-cli --tls --cacert certs/ca.pem -a s3cret GUARD STATUS
+
+# live web dashboard: protocol, framing, concurrency, cluster failure, security
+python dashboard/app.py                         # then open the URL it prints
+
 # tests
 pytest -q
 
@@ -239,6 +296,8 @@ python tools/bench_fsync.py                     # durability modes
 python tools/crash_test.py --iterations 100     # kill -9 recovery
 python tools/plot_distribution.py               # hash ring balance
 python tools/run_experiments.py                 # traces, training, eviction study
+python tools/train_guard.py                     # attack traffic, detector training + evaluation
+python tools/bench_guard.py                     # guard off vs rules vs ML, end to end
 ```
 
 Every generator is seeded and every result file is written with the config
@@ -281,7 +340,12 @@ than oversights.
   Detecting that is the obvious next piece of work.
 - **`__len__` counts expired-but-uncollected keys.** Matching Redis's
   `DBSIZE`; use `GET`/`TTL` for expiry-accurate answers.
-- **No auth, no TLS.** Bind to localhost.
+- **Security is evaluated on synthetic traffic.** The look-alikes make the
+  test harder than "attack vs quiet", but real normal traffic would contain
+  shapes neither detector has seen, and an attacker who knows the features
+  can stay under them. Detection is per connection, so a campaign spread
+  thinly across many connections is harder to catch. One password, no ACL
+  users. See [SECURITY.md](SECURITY.md#limitations).
 
 ---
 
@@ -291,5 +355,7 @@ than oversights.
   needs no locks
 - [NETWORKING.md](NETWORKING.md) — mapping from project parts to networking
   concepts
+- [SECURITY.md](SECURITY.md) — threat model, AUTH and TLS, the attack
+  detector, and how it was evaluated
 - [NOTES.md](NOTES.md) — Phase 0 exploration: real RESP bytes captured off
   the wire, and the baseline Redis benchmarks
